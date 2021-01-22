@@ -51,6 +51,27 @@ type Coordinator struct {
 	// L1BatchTimeoutPerc is the portion of the range before the L1Batch
 	// timeout that will trigger a schedule to forge an L1Batch
 	L1BatchTimeoutPerc float64 `validate:"required"`
+	// StartSlotBlocksDelay is the number of blocks of delay to wait before
+	// starting the pipeline when we reach a slot in which we can forge.
+	StartSlotBlocksDelay int64
+	// ScheduleBatchBlocksAheadCheck is the number of blocks ahead in which
+	// the forger address is checked to be allowed to forge (appart from
+	// checking the next block), used to decide when to stop scheduling new
+	// batches (by stopping the pipeline).
+	// For example, if we are at block 10 and ScheduleBatchBlocksAheadCheck
+	// is 5, eventhough at block 11 we canForge, the pipeline will be
+	// stopped if we can't forge at block 15.
+	// This value should be the expected number of blocks it takes between
+	// scheduling a batch and having it mined.
+	ScheduleBatchBlocksAheadCheck int64
+	// SendBatchBlocksMarginCheck is the number of margin blocks ahead in
+	// which the coordinator is also checked to be allowed to forge, appart
+	// from the next block; used to decide when to stop sending batches to
+	// the smart contract.
+	// For example, if we are at block 10 and SendBatchBlocksMarginCheck is
+	// 5, eventhough at block 11 we canForge, the batch will be discarded
+	// if we can't forge at block 15.
+	SendBatchBlocksMarginCheck int64
 	// ProofServerPollInterval is the waiting interval between polling the
 	// ProofServer while waiting for a particular status
 	ProofServerPollInterval Duration `validate:"required"`
@@ -112,6 +133,10 @@ type Coordinator struct {
 		// AttemptsDelay is delay between attempts do do an eth client
 		// RPC call
 		AttemptsDelay Duration `validate:"required"`
+		// TxResendTimeout is the timeout after which a non-mined
+		// ethereum transaction will be resent (reusing the nonce) with
+		// a newly calculated gas price
+		TxResendTimeout time.Duration `validate:"required"`
 		// Keystore is the ethereum keystore where private keys are kept
 		Keystore struct {
 			// Path to the keystore

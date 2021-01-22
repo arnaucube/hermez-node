@@ -64,6 +64,9 @@ type Debug struct {
 	// StartToSendDelay is the delay between starting a batch and sending
 	// it to ethereum, in seconds
 	StartToSendDelay float64
+	// StartToMineDelay is the delay between starting a batch and  having
+	// it mined in seconds
+	StartToMineDelay float64
 }
 
 // BatchInfo contans the Batch information
@@ -82,9 +85,11 @@ type BatchInfo struct {
 	CoordIdxs             []common.Idx
 	ForgeBatchArgs        *eth.RollupForgeBatchArgs
 	// FeesInfo
-	EthTx   *types.Transaction
-	Receipt *types.Receipt
-	Debug   Debug
+	EthTx *types.Transaction
+	// SendTimestamp  the time of batch sent to ethereum
+	SendTimestamp time.Time
+	Receipt       *types.Receipt
+	Debug         Debug
 }
 
 // DebugStore is a debug function to store the BatchInfo as a json text file in
