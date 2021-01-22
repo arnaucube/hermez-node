@@ -41,6 +41,8 @@ type TxManager struct {
 	lastPendingBatch common.BatchNum
 	lastSuccessNonce uint64
 	lastPendingNonce uint64
+
+	lastSentL1BatchBlockNum int64
 }
 
 // NewTxManager creates a new TxManager
@@ -105,15 +107,7 @@ func (t *TxManager) SetSyncStatsVars(ctx context.Context, stats *synchronizer.St
 }
 
 func (t *TxManager) syncSCVars(vars synchronizer.SCVariablesPtr) {
-	if vars.Rollup != nil {
-		t.vars.Rollup = *vars.Rollup
-	}
-	if vars.Auction != nil {
-		t.vars.Auction = *vars.Auction
-	}
-	if vars.WDelayer != nil {
-		t.vars.WDelayer = *vars.WDelayer
-	}
+	updateSCVars(&t.vars, vars)
 }
 
 // NewAuth generates a new auth object for an ethereum transaction
@@ -141,13 +135,29 @@ func (t *TxManager) NewAuth(ctx context.Context) (*bind.TransactOpts, error) {
 	return auth, nil
 }
 
+func (t *TxManager) shouldSendRollupForgeBatch(batchInfo *BatchInfo) error {
+	nextBlock := t.stats.Eth.LastBlock.Num + 1
+	if !t.canForgeAt(nextBlock) {
+		return tracerr.Wrap(fmt.Errorf("can't forge in the next block: %v", nextBlock))
+	}
+	if t.mustL1L2Batch(nextBlock) && !batchInfo.L1Batch {
+		return tracerr.Wrap(fmt.Errorf("can't forge non-L1Batch in the next block: %v", nextBlock))
+	}
+	margin := t.cfg.SendBatchBlocksMarginCheck
+	if margin != 0 {
+		if !t.canForgeAt(nextBlock + margin) {
+			return tracerr.Wrap(fmt.Errorf("can't forge after %v blocks: %v",
+				margin, nextBlock))
+		}
+		if t.mustL1L2Batch(nextBlock+margin) && !batchInfo.L1Batch {
+			return tracerr.Wrap(fmt.Errorf("can't forge non-L1Batch after %v blocks: %v",
+				margin, nextBlock))
+		}
+	}
+	return nil
+}
+
 func (t *TxManager) sendRollupForgeBatch(ctx context.Context, batchInfo *BatchInfo) error {
-	// TODO: Check if we can forge in the next blockNum, abort if we can't
-	batchInfo.Debug.Status = StatusSent
-	batchInfo.Debug.SendBlockNum = t.stats.Eth.LastBlock.Num + 1
-	batchInfo.Debug.SendTimestamp = time.Now()
-	batchInfo.Debug.StartToSendDelay = batchInfo.Debug.SendTimestamp.Sub(
-		batchInfo.Debug.StartTimestamp).Seconds()
 	var ethTx *types.Transaction
 	var err error
 	auth, err := t.NewAuth(ctx)
@@ -159,11 +169,6 @@ func (t *TxManager) sendRollupForgeBatch(ctx context.Context, batchInfo *BatchIn
 	for attempt := 0; attempt < t.cfg.EthClientAttempts; attempt++ {
 		ethTx, err = t.ethClient.RollupForgeBatch(batchInfo.ForgeBatchArgs, auth)
 		if err != nil {
-			// if strings.Contains(err.Error(), common.AuctionErrMsgCannotForge) {
-			// 	log.Errorw("TxManager ethClient.RollupForgeBatch", "err", err,
-			// 		"block", t.stats.Eth.LastBlock.Num+1)
-			// 	return tracerr.Wrap(err)
-			// }
 			log.Errorw("TxManager ethClient.RollupForgeBatch",
 				"attempt", attempt, "err", err, "block", t.stats.Eth.LastBlock.Num+1,
 				"batchNum", batchInfo.BatchNum)
@@ -181,8 +186,20 @@ func (t *TxManager) sendRollupForgeBatch(ctx context.Context, batchInfo *BatchIn
 	}
 	batchInfo.EthTx = ethTx
 	log.Infow("TxManager ethClient.RollupForgeBatch", "batch", batchInfo.BatchNum, "tx", ethTx.Hash().Hex())
+	now := time.Now()
+	batchInfo.SendTimestamp = now
+
+	batchInfo.Debug.Status = StatusSent
+	batchInfo.Debug.SendBlockNum = t.stats.Eth.LastBlock.Num + 1
+	batchInfo.Debug.SendTimestamp = batchInfo.SendTimestamp
+	batchInfo.Debug.StartToSendDelay = batchInfo.Debug.SendTimestamp.Sub(
+		batchInfo.Debug.StartTimestamp).Seconds()
 	t.cfg.debugBatchStore(batchInfo)
+
 	t.lastPendingBatch = batchInfo.BatchNum
+	if batchInfo.L1Batch {
+		t.lastSentL1BatchBlockNum = t.stats.Eth.LastBlock.Num + 1
+	}
 	if err := t.l2DB.DoneForging(common.TxIDsFromL2Txs(batchInfo.L2Txs), batchInfo.BatchNum); err != nil {
 		return tracerr.Wrap(err)
 	}
@@ -225,6 +242,9 @@ func (t *TxManager) checkEthTransactionReceipt(ctx context.Context, batchInfo *B
 func (t *TxManager) handleReceipt(ctx context.Context, batchInfo *BatchInfo) (*int64, error) {
 	receipt := batchInfo.Receipt
 	if receipt != nil {
+		if batchInfo.EthTx.Nonce > t.lastSuccessNonce {
+			t.lastSuccessNonce = batchInfo.EthTx.Nonce
+		}
 		if receipt.Status == types.ReceiptStatusFailed {
 			batchInfo.Debug.Status = StatusFailed
 			t.cfg.debugBatchStore(batchInfo)
@@ -232,6 +252,9 @@ func (t *TxManager) handleReceipt(ctx context.Context, batchInfo *BatchInfo) (*i
 			log.Warnw("TxManager receipt status is failed", "tx", receipt.TxHash.Hex(),
 				"batch", batchInfo.BatchNum, "block", receipt.BlockNumber.Int64(),
 				"err", err)
+			if batchInfo.BatchNum <= t.lastSuccessBatch {
+				t.lastSuccessBatch = batchInfo.BatchNum - 1
+			}
 			return nil, tracerr.Wrap(fmt.Errorf(
 				"ethereum transaction receipt status is failed: %w", err))
 		} else if receipt.Status == types.ReceiptStatusSuccessful {
@@ -239,6 +262,9 @@ func (t *TxManager) handleReceipt(ctx context.Context, batchInfo *BatchInfo) (*i
 			batchInfo.Debug.MineBlockNum = receipt.BlockNumber.Int64()
 			batchInfo.Debug.StartToMineBlocksDelay = batchInfo.Debug.MineBlockNum -
 				batchInfo.Debug.StartBlockNum
+			now := time.Now()
+			batchInfo.Debug.StartToMineDelay = now.Sub(
+				batchInfo.Debug.StartTimestamp).Seconds()
 			t.cfg.debugBatchStore(batchInfo)
 			if batchInfo.BatchNum > t.lastSuccessBatch {
 				t.lastSuccessBatch = batchInfo.BatchNum
@@ -249,6 +275,9 @@ func (t *TxManager) handleReceipt(ctx context.Context, batchInfo *BatchInfo) (*i
 	}
 	return nil, nil
 }
+
+// TODO:
+// - After sending a message: CancelPipeline, stop all consecutive pending Batches (transactions)
 
 // Run the TxManager
 func (t *TxManager) Run(ctx context.Context) {
@@ -274,6 +303,13 @@ func (t *TxManager) Run(ctx context.Context) {
 			t.stats = statsVars.Stats
 			t.syncSCVars(statsVars.Vars)
 		case batchInfo := <-t.batchCh:
+			if err := t.shouldSendRollupForgeBatch(batchInfo); err != nil {
+				log.Warnw("TxManager: shouldSend", "err", err,
+					"batch", batchInfo.BatchNum)
+				t.coord.SendMsg(ctx, MsgStopPipeline{
+					Reason: fmt.Sprintf("forgeBatch shouldSend: %v", err)})
+				continue
+			}
 			if err := t.sendRollupForgeBatch(ctx, batchInfo); ctx.Err() != nil {
 				continue
 			} else if err != nil {
@@ -282,7 +318,10 @@ func (t *TxManager) Run(ctx context.Context) {
 				// ethereum.  This could be due to the ethNode
 				// failure, or an invalid transaction (that
 				// can't be mined)
-				t.coord.SendMsg(ctx, MsgStopPipeline{Reason: fmt.Sprintf("forgeBatch send: %v", err)})
+				log.Warnw("TxManager: forgeBatch send failed", "err", err,
+					"batch", batchInfo.BatchNum)
+				t.coord.SendMsg(ctx, MsgStopPipeline{
+					Reason: fmt.Sprintf("forgeBatch send: %v", err)})
 				continue
 			}
 			t.queue = append(t.queue, batchInfo)
@@ -304,7 +343,8 @@ func (t *TxManager) Run(ctx context.Context) {
 				// if it was not mined, mined and succesfull or
 				// mined and failed.  This could be due to the
 				// ethNode failure.
-				t.coord.SendMsg(ctx, MsgStopPipeline{Reason: fmt.Sprintf("forgeBatch receipt: %v", err)})
+				t.coord.SendMsg(ctx, MsgStopPipeline{
+					Reason: fmt.Sprintf("forgeBatch receipt: %v", err)})
 			}
 
 			confirm, err := t.handleReceipt(ctx, batchInfo)
@@ -312,32 +352,47 @@ func (t *TxManager) Run(ctx context.Context) {
 				continue
 			} else if err != nil { //nolint:staticcheck
 				// Transaction was rejected
-				t.queue = append(t.queue[:current], t.queue[current+1:]...)
-				if len(t.queue) == 0 {
-					next = 0
-				} else {
-					next = current % len(t.queue)
-				}
-				t.coord.SendMsg(ctx, MsgStopPipeline{Reason: fmt.Sprintf("forgeBatch reject: %v", err)})
+				next = t.removeFromQueue(current)
+				t.coord.SendMsg(ctx, MsgStopPipeline{
+					Reason: fmt.Sprintf("forgeBatch reject: %v", err)})
+				continue
+			}
+			now := time.Now()
+			if confirm == nil && batchInfo.SendTimestamp > t.cfg.EthTxResendTimeout {
+				log.Infow("TxManager: forgeBatch tx not been mined timeout",
+					"tx", batchInfo.EthTx.Hex(), "batch", batchInfo.BatchNum)
+				// TODO: Resend Tx with same nonce
 			}
 			if confirm != nil && *confirm >= t.cfg.ConfirmBlocks {
-				log.Debugw("TxManager tx for RollupForgeBatch confirmed",
-					"batch", batchInfo.BatchNum)
-				t.queue = append(t.queue[:current], t.queue[current+1:]...)
-				if len(t.queue) == 0 {
-					next = 0
-				} else {
-					next = current % len(t.queue)
-				}
+				log.Debugw("TxManager: forgeBatch tx confirmed",
+					"tx", batchInfo.EthTx.Hex(), "batch", batchInfo.BatchNum)
+				next = t.removeFromQueue(current)
 			}
 		}
 	}
 }
 
-// nolint reason: this function will be used in the future
-//nolint:unused
-func (t *TxManager) canForge(stats *synchronizer.Stats, blockNum int64) bool {
+// Removes batchInfo at position from the queue, and returns the next position
+func (t *TxManager) removeFromQueue(position int) (next int) {
+	t.queue = append(t.queue[:current], t.queue[current+1:]...)
+	if len(t.queue) == 0 {
+		next = 0
+	} else {
+		next = current % len(t.queue)
+	}
+	return next
+}
+
+func (t *TxManager) canForgeAt(blockNum int64) bool {
 	return canForge(&t.consts.Auction, &t.vars.Auction,
-		&stats.Sync.Auction.CurrentSlot, &stats.Sync.Auction.NextSlot,
+		&t.stats.Sync.Auction.CurrentSlot, &t.stats.Sync.Auction.NextSlot,
 		t.cfg.ForgerAddress, blockNum)
+}
+
+func (t *TxManager) mustL1L2Batch(blockNum int64) bool {
+	lastL1BatchBlockNum := t.lastSentL1BatchBlockNum
+	if t.stats.Sync.LastL1BatchBlock > lastL1BatchBlockNum {
+		lastL1BatchBlockNum = t.stats.Sync.LastL1BatchBlock
+	}
+	return blockNum-lastL1BatchBlockNum >= t.vars.Rollup.ForgeL1L2BatchTimeout-1
 }

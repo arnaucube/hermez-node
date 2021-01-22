@@ -492,6 +492,10 @@ func (n *Node) handleNewBlock(ctx context.Context, stats *synchronizer.Stats, va
 			); err != nil {
 				log.Errorw("API.UpdateNetworkInfo", "err", err)
 			}
+		} else {
+			n.nodeAPI.api.UpdateNetworkInfoBlock(
+				stats.Eth.LastBlock, stats.Sync.LastBlock,
+			)
 		}
 	}
 }

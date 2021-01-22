@@ -122,15 +122,7 @@ func (p *Pipeline) reset(batchNum common.BatchNum,
 }
 
 func (p *Pipeline) syncSCVars(vars synchronizer.SCVariablesPtr) {
-	if vars.Rollup != nil {
-		p.vars.Rollup = *vars.Rollup
-	}
-	if vars.Auction != nil {
-		p.vars.Auction = *vars.Auction
-	}
-	if vars.WDelayer != nil {
-		p.vars.WDelayer = *vars.WDelayer
-	}
+	updateSCVars(&p.vars, vars)
 }
 
 // handleForgeBatch calls p.forgeBatch to forge the batch and get the zkInputs,

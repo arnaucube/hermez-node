@@ -42,6 +42,29 @@ type Config struct {
 	// L1BatchTimeoutPerc is the portion of the range before the L1Batch
 	// timeout that will trigger a schedule to forge an L1Batch
 	L1BatchTimeoutPerc float64
+	// StartSlotBlocksDelay is the number of blocks of delay to wait before
+	// starting the pipeline when we reach a slot in which we can forge.
+	StartSlotBlocksDelay int64
+	// ScheduleBatchBlocksAheadCheck is the number of blocks ahead in which
+	// the forger address is checked to be allowed to forge (appart from
+	// checking the next block), used to decide when to stop scheduling new
+	// batches (by stopping the pipeline).
+	// For example, if we are at block 10 and ScheduleBatchBlocksAheadCheck
+	// is 5, eventhough at block 11 we canForge, the pipeline will be
+	// stopped if we can't forge at block 15.
+	// This value should be the expected number of blocks it takes between
+	// scheduling a batch and having it mined.
+	ScheduleBatchBlocksAheadCheck int64
+	// SendBatchBlocksMarginCheck is the number of margin blocks ahead in
+	// which the coordinator is also checked to be allowed to forge, appart
+	// from the next block; used to decide when to stop sending batches to
+	// the smart contract.
+	// For example, if we are at block 10 and SendBatchBlocksMarginCheck is
+	// 5, eventhough at block 11 we canForge, the batch will be discarded
+	// if we can't forge at block 15.
+	// This value should be the expected number of blocks it takes between
+	// sending a batch and having it mined.
+	SendBatchBlocksMarginCheck int64
 	// EthClientAttempts is the number of attempts to do an eth client RPC
 	// call before giving up
 	EthClientAttempts int
@@ -54,13 +77,19 @@ type Config struct {
 	// EthClientAttemptsDelay is delay between attempts do do an eth client
 	// RPC call
 	EthClientAttemptsDelay time.Duration
+	// EthTxResendTimeout is the timeout after which a non-mined ethereum
+	// transaction will be resent (reusing the nonce) with a newly
+	// calculated gas price
+	EthTxResendTimeout time.Duration
 	// TxManagerCheckInterval is the waiting interval between receipt
 	// checks of ethereum transactions in the TxManager
 	TxManagerCheckInterval time.Duration
 	// DebugBatchPath if set, specifies the path where batchInfo is stored
 	// in JSON in every step/update of the pipeline
-	DebugBatchPath    string
-	Purger            PurgerCfg
+	DebugBatchPath string
+	Purger         PurgerCfg
+	// VerifierIdx is the index of the verifier contract registered in the
+	// smart contract
 	VerifierIdx       uint8
 	TxProcessorConfig txprocessor.Config
 }
@@ -215,16 +244,20 @@ func (c *Coordinator) SendMsg(ctx context.Context, msg interface{}) {
 	}
 }
 
+func updateSCVars(vars *synchronizer.SCVariables, update synchronizer.SCVariablesPtr) {
+	if update.Rollup != nil {
+		vars.Rollup = *update.Rollup
+	}
+	if update.Auction != nil {
+		vars.Auction = *update.Auction
+	}
+	if update.WDelayer != nil {
+		vars.WDelayer = *update.WDelayer
+	}
+}
+
 func (c *Coordinator) syncSCVars(vars synchronizer.SCVariablesPtr) {
-	if vars.Rollup != nil {
-		c.vars.Rollup = *vars.Rollup
-	}
-	if vars.Auction != nil {
-		c.vars.Auction = *vars.Auction
-	}
-	if vars.WDelayer != nil {
-		c.vars.WDelayer = *vars.WDelayer
-	}
+	updateSCVars(&c.vars, vars)
 }
 
 func canForge(auctionConstants *common.AuctionConstants, auctionVars *common.AuctionVariables,
@@ -254,6 +287,12 @@ func canForge(auctionConstants *common.AuctionConstants, auctionVars *common.Auc
 	return false
 }
 
+func (c *Coordinator) canForgeAt(blockNum int64) bool {
+	return canForge(&c.consts.Auction, &c.vars.Auction,
+		&c.stats.Sync.Auction.CurrentSlot, &c.stats.Sync.Auction.NextSlot,
+		c.cfg.ForgerAddress, blockNum)
+}
+
 func (c *Coordinator) canForge() bool {
 	blockNum := c.stats.Eth.LastBlock.Num + 1
 	return canForge(&c.consts.Auction, &c.vars.Auction,
@@ -262,9 +301,18 @@ func (c *Coordinator) canForge() bool {
 }
 
 func (c *Coordinator) syncStats(ctx context.Context, stats *synchronizer.Stats) error {
-	canForge := c.canForge()
+	nextBlock := c.stats.Eth.LastBlock.Num + 1
+	canForge := c.canForgeAt(nextBlock)
+	if c.cfg.ScheduleBatchBlocksAheadCheck != 0 && canForge {
+		canForge = c.canForgeAt(nextBlock + c.cfg.ScheduleBatchBlocksAheadCheck)
+	}
 	if c.pipeline == nil {
-		if canForge {
+		relativeBlock := c.consts.Auction.RelativeBlock(nextBlock)
+		if canForge && relativeBlock < c.cfg.StartSlotBlocksDelay {
+			log.Debugw("Coordinator: delaying pipeline start due to "+
+				"relativeBlock (%v) < cfg.StartSlotBlocksDelay (%v)",
+				relativeBlock, c.cfg.StartSlotBlocksDelay)
+		} else if canForge {
 			log.Infow("Coordinator: forging state begin", "block",
 				stats.Eth.LastBlock.Num+1, "batch", stats.Sync.LastBatch)
 			batchNum := common.BatchNum(stats.Sync.LastBatch)
