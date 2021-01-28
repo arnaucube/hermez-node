@@ -203,6 +203,10 @@ func TestBatches(t *testing.T) {
 	fetchedLastBatchNum, err := historyDB.GetLastBatchNum()
 	assert.NoError(t, err)
 	assert.Equal(t, batches[len(batches)-1].BatchNum, fetchedLastBatchNum)
+	// Test GetLastBatch
+	fetchedLastBatch, err := historyDB.GetLastBatch()
+	assert.NoError(t, err)
+	assert.Equal(t, &batches[len(batches)-1], fetchedLastBatch)
 	// Test GetLastL1TxsNum
 	fetchedLastL1TxsNum, err := historyDB.GetLastL1TxsNum()
 	assert.NoError(t, err)

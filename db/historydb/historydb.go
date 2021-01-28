@@ -208,6 +208,18 @@ func (hdb *HistoryDB) GetLastBatchNum() (common.BatchNum, error) {
 	return batchNum, tracerr.Wrap(row.Scan(&batchNum))
 }
 
+// GetLastBatchreturns the last forged batch
+func (hdb *HistoryDB) GetLastBatch() (*common.Batch, error) {
+	var batch common.Batch
+	err := meddler.QueryRow(
+		hdb.db, &batch, `SELECT batch.batch_num, batch.eth_block_num, batch.forger_addr,
+		batch.fees_collected, batch.fee_idxs_coordinator, batch.state_root,
+		batch.num_accounts, batch.last_idx, batch.exit_root, batch.forge_l1_txs_num,
+		batch.slot_num, batch.total_fees_usd FROM batch ORDER BY batch_num DESC LIMIT 1;`,
+	)
+	return &batch, err
+}
+
 // GetLastL1BatchBlockNum returns the blockNum of the latest forged l1Batch
 func (hdb *HistoryDB) GetLastL1BatchBlockNum() (int64, error) {
 	row := hdb.db.QueryRow(`SELECT eth_block_num FROM batch

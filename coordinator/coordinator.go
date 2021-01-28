@@ -3,6 +3,7 @@ package coordinator
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"os"
 	"strings"
 	"sync"
@@ -81,6 +82,9 @@ type Config struct {
 	// transaction will be resent (reusing the nonce) with a newly
 	// calculated gas price
 	EthTxResendTimeout time.Duration
+	// MaxGasPrice is the maximum gas price allowed for ethereum
+	// transactions
+	MaxGasPrice *big.Int
 	// TxManagerCheckInterval is the waiting interval between receipt
 	// checks of ethereum transactions in the TxManager
 	TxManagerCheckInterval time.Duration
@@ -103,15 +107,22 @@ func (c *Config) debugBatchStore(batchInfo *BatchInfo) {
 	}
 }
 
+type fromBatch struct {
+	BatchNum   common.BatchNum
+	ForgerAddr ethCommon.Address
+	StateRoot  *big.Int
+}
+
 // Coordinator implements the Coordinator type
 type Coordinator struct {
 	// State
-	pipelineBatchNum common.BatchNum // batchNum from which we started the pipeline
-	provers          []prover.Client
-	consts           synchronizer.SCConsts
-	vars             synchronizer.SCVariables
-	stats            synchronizer.Stats
-	started          bool
+	pipelineNum       int       // Pipeline sequential number.  The first pipeline is 1
+	pipelineFromBatch fromBatch // batch from which we started the pipeline
+	provers           []prover.Client
+	consts            synchronizer.SCConsts
+	vars              synchronizer.SCVariables
+	stats             synchronizer.Stats
+	started           bool
 
 	cfg Config
 
@@ -168,10 +179,15 @@ func NewCoordinator(cfg Config,
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c := Coordinator{
-		pipelineBatchNum: -1,
-		provers:          serverProofs,
-		consts:           *scConsts,
-		vars:             *initSCVars,
+		pipelineNum: 0,
+		pipelineFromBatch: fromBatch{
+			BatchNum:   0,
+			ForgerAddr: ethCommon.Address{},
+			StateRoot:  big.NewInt(0),
+		},
+		provers: serverProofs,
+		consts:  *scConsts,
+		vars:    *initSCVars,
 
 		cfg: cfg,
 
@@ -212,7 +228,8 @@ func (c *Coordinator) BatchBuilder() *batchbuilder.BatchBuilder {
 }
 
 func (c *Coordinator) newPipeline(ctx context.Context) (*Pipeline, error) {
-	return NewPipeline(ctx, c.cfg, c.historyDB, c.l2DB, c.txSelector,
+	c.pipelineNum++
+	return NewPipeline(ctx, c.cfg, c.pipelineNum, c.historyDB, c.l2DB, c.txSelector,
 		c.batchBuilder, c.purger, c.txManager, c.provers, &c.consts)
 }
 
@@ -262,13 +279,18 @@ func (c *Coordinator) syncSCVars(vars synchronizer.SCVariablesPtr) {
 
 func canForge(auctionConstants *common.AuctionConstants, auctionVars *common.AuctionVariables,
 	currentSlot *common.Slot, nextSlot *common.Slot, addr ethCommon.Address, blockNum int64) bool {
+	if blockNum < auctionConstants.GenesisBlockNum {
+		log.Infow("canForge: requested blockNum is < genesis", "blockNum", blockNum,
+			"genesis", auctionConstants.GenesisBlockNum)
+		return false
+	}
 	var slot *common.Slot
 	if currentSlot.StartBlock <= blockNum && blockNum <= currentSlot.EndBlock {
 		slot = currentSlot
 	} else if nextSlot.StartBlock <= blockNum && blockNum <= nextSlot.EndBlock {
 		slot = nextSlot
 	} else {
-		log.Warnw("Coordinator: requested blockNum for canForge is outside slot",
+		log.Warnw("canForge: requested blockNum is outside current and next slot",
 			"blockNum", blockNum, "currentSlot", currentSlot,
 			"nextSlot", nextSlot,
 		)
@@ -277,13 +299,14 @@ func canForge(auctionConstants *common.AuctionConstants, auctionVars *common.Auc
 	anyoneForge := false
 	if !slot.ForgerCommitment &&
 		auctionConstants.RelativeBlock(blockNum) >= int64(auctionVars.SlotDeadline) {
-		log.Debugw("Coordinator: anyone can forge in the current slot (slotDeadline passed)",
+		log.Debugw("canForge: anyone can forge in the current slot (slotDeadline passed)",
 			"block", blockNum)
 		anyoneForge = true
 	}
 	if slot.Forger == addr || anyoneForge {
 		return true
 	}
+	log.Debugw("canForge: can't forge", "slot.Forger", slot.Forger)
 	return false
 }
 
@@ -314,8 +337,8 @@ func (c *Coordinator) syncStats(ctx context.Context, stats *synchronizer.Stats) 
 				relativeBlock, c.cfg.StartSlotBlocksDelay)
 		} else if canForge {
 			log.Infow("Coordinator: forging state begin", "block",
-				stats.Eth.LastBlock.Num+1, "batch", stats.Sync.LastBatch)
-			batchNum := common.BatchNum(stats.Sync.LastBatch)
+				stats.Eth.LastBlock.Num+1, "batch", stats.Sync.LastBatch.BatchNum)
+			batchNum := stats.Sync.LastBatch.BatchNum
 			var err error
 			if c.pipeline, err = c.newPipeline(ctx); err != nil {
 				return tracerr.Wrap(err)
@@ -324,7 +347,7 @@ func (c *Coordinator) syncStats(ctx context.Context, stats *synchronizer.Stats) 
 				c.pipeline = nil
 				return tracerr.Wrap(err)
 			}
-			c.pipelineBatchNum = batchNum
+			// c.pipelineBatchNum = batchNum
 		}
 	} else {
 		if !canForge {
@@ -341,17 +364,18 @@ func (c *Coordinator) syncStats(ctx context.Context, stats *synchronizer.Stats) 
 		// 		return err
 		// 	}
 		// }
-		if c.purger.CanInvalidate(stats.Sync.LastBlock.Num, stats.Sync.LastBatch) {
-			if err := c.txSelector.Reset(common.BatchNum(stats.Sync.LastBatch)); err != nil {
+		if c.purger.CanInvalidate(stats.Sync.LastBlock.Num, int64(stats.Sync.LastBatch.BatchNum)) {
+			if err := c.txSelector.Reset(stats.Sync.LastBatch.BatchNum); err != nil {
 				return tracerr.Wrap(err)
 			}
 		}
 		_, err := c.purger.InvalidateMaybe(c.l2DB, c.txSelector.LocalAccountsDB(),
-			stats.Sync.LastBlock.Num, stats.Sync.LastBatch)
+			stats.Sync.LastBlock.Num, int64(stats.Sync.LastBatch.BatchNum))
 		if err != nil {
 			return tracerr.Wrap(err)
 		}
-		_, err = c.purger.PurgeMaybe(c.l2DB, stats.Sync.LastBlock.Num, stats.Sync.LastBatch)
+		_, err = c.purger.PurgeMaybe(c.l2DB, stats.Sync.LastBlock.Num,
+			int64(stats.Sync.LastBatch.BatchNum))
 		if err != nil {
 			return tracerr.Wrap(err)
 		}
@@ -379,15 +403,19 @@ func (c *Coordinator) handleReorg(ctx context.Context, msg *MsgSyncReorg) error 
 	if c.pipeline != nil {
 		c.pipeline.SetSyncStatsVars(ctx, &msg.Stats, &msg.Vars)
 	}
-	if common.BatchNum(c.stats.Sync.LastBatch) < c.pipelineBatchNum {
-		// There's been a reorg and the batch from which the pipeline
-		// was started was in a block that was discarded.  The batch
-		// may not be in the main chain, so we stop the pipeline as a
-		// precaution (it will be started again once the node is in
-		// sync).
-		log.Infow("Coordinator.handleReorg StopPipeline sync.LastBatch < c.pipelineBatchNum",
-			"sync.LastBatch", c.stats.Sync.LastBatch,
-			"c.pipelineBatchNum", c.pipelineBatchNum)
+	if c.stats.Sync.LastBatch.ForgerAddr != c.cfg.ForgerAddress &&
+		c.stats.Sync.LastBatch.StateRoot.Cmp(c.pipelineFromBatch.StateRoot) != 0 {
+		// There's been a reorg and the batch state root from which the
+		// pipeline was started has changed (probably because it was in
+		// a block that was discarded), and it was sent by a different
+		// coordinator than us.  That batch may never be in the main
+		// chain, so we stop the pipeline  (it will be started again
+		// once the node is in sync).
+		log.Infow("Coordinator.handleReorg StopPipeline sync.LastBatch.ForgerAddr != cfg.ForgerAddr "+
+			"& sync.LastBatch.StateRoot != pipelineFromBatch.StateRoot",
+			"sync.LastBatch.StateRoot", c.stats.Sync.LastBatch.StateRoot,
+			"pipelineFromBatch.StateRoot", c.pipelineFromBatch.StateRoot)
+		c.txManager.DiscardPipeline(ctx, c.pipelineNum)
 		if err := c.handleStopPipeline(ctx, "reorg"); err != nil {
 			return tracerr.Wrap(err)
 		}
@@ -400,7 +428,7 @@ func (c *Coordinator) handleStopPipeline(ctx context.Context, reason string) err
 		c.pipeline.Stop(c.ctx)
 		c.pipeline = nil
 	}
-	if err := c.l2DB.Reorg(common.BatchNum(c.stats.Sync.LastBatch)); err != nil {
+	if err := c.l2DB.Reorg(c.stats.Sync.LastBatch.BatchNum); err != nil {
 		return tracerr.Wrap(err)
 	}
 	if strings.Contains(reason, common.AuctionErrMsgCannotForge) { //nolint:staticcheck

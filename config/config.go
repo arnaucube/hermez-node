@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"io/ioutil"
+	"math/big"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -122,6 +123,9 @@ type Coordinator struct {
 		// calls, except for methods  where a particular gas limit is
 		// harcoded because it's known to be a big value
 		CallGasLimit uint64 `validate:"required"`
+		// MaxGasPrice is the maximum gas price allowed for ethereum
+		// transactions
+		MaxGasPrice *big.Int `validate:"required"`
 		// GasPriceDiv is the gas price division
 		GasPriceDiv uint64 `validate:"required"`
 		// CheckLoopInterval is the waiting interval between receipt
@@ -136,7 +140,7 @@ type Coordinator struct {
 		// TxResendTimeout is the timeout after which a non-mined
 		// ethereum transaction will be resent (reusing the nonce) with
 		// a newly calculated gas price
-		TxResendTimeout time.Duration `validate:"required"`
+		TxResendTimeout Duration `validate:"required"`
 		// Keystore is the ethereum keystore where private keys are kept
 		Keystore struct {
 			// Path to the keystore

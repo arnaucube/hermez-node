@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"math/big"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	ethCommon "github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/hermeznetwork/hermez-node/batchbuilder"
 	"github.com/hermeznetwork/hermez-node/common"
 	dbUtils "github.com/hermeznetwork/hermez-node/db"
@@ -261,8 +263,8 @@ func TestCoordinatorFlow(t *testing.T) {
 			var stats synchronizer.Stats
 			stats.Eth.LastBlock = *ethClient.CtlLastBlock()
 			stats.Sync.LastBlock = stats.Eth.LastBlock
-			stats.Eth.LastBatch = ethClient.CtlLastForgedBatch()
-			stats.Sync.LastBatch = stats.Eth.LastBatch
+			stats.Eth.LastBatchNum = ethClient.CtlLastForgedBatch()
+			stats.Sync.LastBatch.BatchNum = common.BatchNum(stats.Eth.LastBatchNum)
 			canForge, err := ethClient.AuctionCanForge(forger, blockNum+1)
 			require.NoError(t, err)
 			var slot common.Slot
@@ -279,7 +281,7 @@ func TestCoordinatorFlow(t *testing.T) {
 			// Copy stateDB to synchronizer if there was a new batch
 			source := fmt.Sprintf("%v/BatchNum%v", batchBuilderDBPath, stats.Sync.LastBatch)
 			dest := fmt.Sprintf("%v/BatchNum%v", syncDBPath, stats.Sync.LastBatch)
-			if stats.Sync.LastBatch != 0 {
+			if stats.Sync.LastBatch.BatchNum != 0 {
 				if _, err := os.Stat(dest); os.IsNotExist(err) {
 					log.Infow("Making pebble checkpoint for sync",
 						"source", source, "dest", dest)
@@ -566,3 +568,8 @@ func TestCoordinatorStress(t *testing.T) {
 // TODO: Test forgeBatch
 // TODO: Test waitServerProof
 // TODO: Test handleReorg
+
+func TestFoo(t *testing.T) {
+	a := tracerr.Wrap(fmt.Errorf("AAA: %w", core.ErrNonceTooLow))
+	fmt.Println(errors.Is(a, core.ErrNonceTooLow))
+}

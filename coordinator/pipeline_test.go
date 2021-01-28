@@ -172,7 +172,7 @@ func TestPipelineForgeBatchWithTxs(t *testing.T) {
 	// users with positive balances
 	tilCtx := preloadSync(t, ethClient, sync, modules.historyDB, modules.stateDB)
 	syncStats := sync.Stats()
-	batchNum := common.BatchNum(syncStats.Sync.LastBatch)
+	batchNum := syncStats.Sync.LastBatch.BatchNum
 	syncSCVars := sync.SCVars()
 
 	pipeline, err := coord.newPipeline(ctx)

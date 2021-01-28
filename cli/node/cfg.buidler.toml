@@ -91,6 +91,7 @@ AttemptsDelay = "500ms"
 TxResendTimeout = "2m"
 CallGasLimit = 300000
 GasPriceDiv = 100
+MaxGasPrice = "0"
 
 [Coordinator.EthClient.Keystore]
 Path = "/tmp/iden3-test/hermez/ethkeystore"

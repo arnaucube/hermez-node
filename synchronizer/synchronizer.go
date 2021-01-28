@@ -25,12 +25,12 @@ type Stats struct {
 		Updated       time.Time
 		FirstBlockNum int64
 		LastBlock     common.Block
-		LastBatch     int64
+		LastBatchNum  int64
 	}
 	Sync struct {
 		Updated   time.Time
 		LastBlock common.Block
-		LastBatch int64
+		LastBatch common.Batch
 		// LastL1BatchBlock is the last ethereum block in which an
 		// l1Batch was forged
 		LastL1BatchBlock  int64
@@ -77,13 +77,13 @@ func (s *StatsHolder) UpdateCurrentNextSlot(current *common.Slot, next *common.S
 }
 
 // UpdateSync updates the synchronizer stats
-func (s *StatsHolder) UpdateSync(lastBlock *common.Block, lastBatch *common.BatchNum,
+func (s *StatsHolder) UpdateSync(lastBlock *common.Block, lastBatch *common.Batch,
 	lastL1BatchBlock *int64, lastForgeL1TxsNum *int64) {
 	now := time.Now()
 	s.rw.Lock()
 	s.Sync.LastBlock = *lastBlock
 	if lastBatch != nil {
-		s.Sync.LastBatch = int64(*lastBatch)
+		s.Sync.LastBatch = *lastBatch
 	}
 	if lastL1BatchBlock != nil {
 		s.Sync.LastL1BatchBlock = *lastL1BatchBlock
@@ -107,14 +107,14 @@ func (s *StatsHolder) UpdateEth(ethClient eth.ClientInterface) error {
 	if err != nil {
 		return tracerr.Wrap(err)
 	}
-	lastBatch, err := ethClient.RollupLastForgedBatch()
+	lastBatchNum, err := ethClient.RollupLastForgedBatch()
 	if err != nil {
 		return tracerr.Wrap(err)
 	}
 	s.rw.Lock()
 	s.Eth.Updated = now
 	s.Eth.LastBlock = *lastBlock
-	s.Eth.LastBatch = lastBatch
+	s.Eth.LastBatchNum = lastBatchNum
 	s.rw.Unlock()
 	return nil
 }
@@ -139,6 +139,10 @@ func (s *StatsHolder) CopyStats() *Stats {
 		sCopy.Sync.Auction.NextSlot.DefaultSlotBid =
 			common.CopyBigInt(s.Sync.Auction.NextSlot.DefaultSlotBid)
 	}
+	if s.Sync.LastBatch.StateRoot != nil {
+		sCopy.Sync.LastBatch.StateRoot =
+			common.CopyBigInt(s.Sync.LastBatch.StateRoot)
+	}
 	s.rw.RUnlock()
 	return &sCopy
 }
@@ -152,9 +156,9 @@ func (s *StatsHolder) blocksPerc() float64 {
 		float64(s.Eth.LastBlock.Num-(s.Eth.FirstBlockNum-1))
 }
 
-func (s *StatsHolder) batchesPerc(batchNum int64) float64 {
+func (s *StatsHolder) batchesPerc(batchNum common.BatchNum) float64 {
 	return float64(batchNum) * 100.0 /
-		float64(s.Eth.LastBatch)
+		float64(s.Eth.LastBatchNum)
 }
 
 // StartBlockNums sets the first block used to start tracking the smart
@@ -458,9 +462,9 @@ func (s *Synchronizer) init() error {
 		"ethLastBlock", s.stats.Eth.LastBlock,
 	)
 	log.Infow("Sync init batch",
-		"syncLastBatch", s.stats.Sync.LastBatch,
-		"syncBatchesPerc", s.stats.batchesPerc(s.stats.Sync.LastBatch),
-		"ethLastBatch", s.stats.Eth.LastBatch,
+		"syncLastBatch", s.stats.Sync.LastBatch.BatchNum,
+		"syncBatchesPerc", s.stats.batchesPerc(s.stats.Sync.LastBatch.BatchNum),
+		"ethLastBatch", s.stats.Eth.LastBatchNum,
 	)
 	return nil
 }
@@ -627,7 +631,7 @@ func (s *Synchronizer) Sync2(ctx context.Context,
 			}
 		}
 		s.stats.UpdateSync(ethBlock,
-			&rollupData.Batches[batchesLen-1].Batch.BatchNum,
+			&rollupData.Batches[batchesLen-1].Batch,
 			lastL1BatchBlock, lastForgeL1TxsNum)
 	}
 	var firstBatchBlockNum *int64
@@ -646,8 +650,8 @@ func (s *Synchronizer) Sync2(ctx context.Context,
 	for _, batchData := range rollupData.Batches {
 		log.Debugw("Synced batch",
 			"syncLastBatch", batchData.Batch.BatchNum,
-			"syncBatchesPerc", s.stats.batchesPerc(int64(batchData.Batch.BatchNum)),
-			"ethLastBatch", s.stats.Eth.LastBatch,
+			"syncBatchesPerc", s.stats.batchesPerc(batchData.Batch.BatchNum),
+			"ethLastBatch", s.stats.Eth.LastBatchNum,
 		)
 	}
 
