@@ -26,6 +26,7 @@ type statsVars struct {
 
 // Pipeline manages the forging of batches with parallel server proofs
 type Pipeline struct {
+	num    int
 	cfg    Config
 	consts synchronizer.SCConsts
 
@@ -56,6 +57,7 @@ type Pipeline struct {
 // NewPipeline creates a new Pipeline
 func NewPipeline(ctx context.Context,
 	cfg Config,
+	num int, // Pipeline sequential number
 	historyDB *historydb.HistoryDB,
 	l2DB *l2db.L2DB,
 	txSelector *txselector.TxSelector,
@@ -79,6 +81,7 @@ func NewPipeline(ctx context.Context,
 		return nil, tracerr.Wrap(fmt.Errorf("no provers in the pool"))
 	}
 	return &Pipeline{
+		num:          num,
 		cfg:          cfg,
 		historyDB:    historyDB,
 		l2DB:         l2DB,
@@ -276,8 +279,8 @@ func (p *Pipeline) forgeBatch(batchNum common.BatchNum) (batchInfo *BatchInfo, e
 	if err != nil {
 		return nil, tracerr.Wrap(err)
 	}
-
-	batchInfo = &BatchInfo{BatchNum: batchNum} // to accumulate metadata of the batch
+	// Structure to accumulate data and metadata of the batch
+	batchInfo = &BatchInfo{PipelineNum: p.num, BatchNum: batchNum}
 	batchInfo.Debug.StartTimestamp = time.Now()
 	batchInfo.Debug.StartBlockNum = p.stats.Eth.LastBlock.Num + 1
 

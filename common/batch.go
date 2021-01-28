@@ -27,6 +27,23 @@ type Batch struct {
 	TotalFeesUSD       *float64             `meddler:"total_fees_usd"`
 }
 
+func NewEmptyBatch() *Batch {
+	return &Batch{
+		BatchNum:           0,
+		EthBlockNum:        0,
+		ForgerAddr:         ethCommon.Address{},
+		CollectedFees:      make(map[TokenID]*big.Int),
+		FeeIdxsCoordinator: make([]Idx, 0),
+		StateRoot:          big.NewInt(0),
+		NumAccounts:        0,
+		LastIdx:            0,
+		ExitRoot:           big.NewInt(0),
+		ForgeL1TxsNum:      nil,
+		SlotNum:            0,
+		TotalFeesUSD:       nil,
+	}
+}
+
 // BatchNum identifies a batch
 type BatchNum int64
 
@@ -75,3 +92,23 @@ func NewBatchData() *BatchData {
 		Batch:            Batch{},
 	}
 }
+
+// BatchSync is a subset of Batch that contains fileds needed for the
+// synchronizer and coordinator
+// type BatchSync struct {
+// 	BatchNum    BatchNum          `meddler:"batch_num"`
+// 	EthBlockNum int64             `meddler:"eth_block_num"` // Ethereum block in which the batch is forged
+// 	ForgerAddr  ethCommon.Address `meddler:"forger_addr"`
+// 	StateRoot   *big.Int          `meddler:"state_root,bigint"`
+// 	SlotNum     int64             `meddler:"slot_num"` // Slot in which the batch is forged
+// }
+//
+// func NewBatchSync() *BatchSync {
+// 	return &BatchSync{
+// 		BatchNum:    0,
+// 		EthBlockNum: 0,
+// 		ForgerAddr:  ethCommon.Address,
+// 		StateRoot:   big.NewInt(0),
+// 		SlotNum:     0,
+// 	}
+// }

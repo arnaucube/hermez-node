@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/hermeznetwork/hermez-node/common"
 	"github.com/hermeznetwork/hermez-node/db/l2db"
@@ -35,12 +37,20 @@ type TxManager struct {
 	vars        synchronizer.SCVariables
 	statsVarsCh chan statsVars
 
-	queue []*BatchInfo
+	discardPipelineCh chan int // int refers to the pipelineNum
+
+	minPipelineNum int
+	queue          Queue
 	// lastSuccessBatch stores the last BatchNum that who's forge call was confirmed
 	lastSuccessBatch common.BatchNum
-	lastPendingBatch common.BatchNum
-	lastSuccessNonce uint64
-	lastPendingNonce uint64
+	// lastPendingBatch common.BatchNum
+	// accNonce is the account nonce in the last mined block (due to mined txs)
+	accNonce uint64
+	// accNextNonce is the nonce that we should use to send the next tx.
+	// In some cases this will be a reused nonce of an already pending tx.
+	accNextNonce uint64
+	// accPendingNonce is the pending nonce of the account due to pending txs
+	// accPendingNonce uint64
 
 	lastSentL1BatchBlockNum int64
 }
@@ -56,26 +66,27 @@ func NewTxManager(ctx context.Context, cfg *Config, ethClient eth.ClientInterfac
 	if err != nil {
 		return nil, tracerr.Wrap(err)
 	}
-	lastSuccessNonce, err := ethClient.EthNonceAt(ctx, *address, nil)
+	accNonce, err := ethClient.EthNonceAt(ctx, *address, nil)
 	if err != nil {
 		return nil, err
 	}
-	lastPendingNonce, err := ethClient.EthPendingNonceAt(ctx, *address)
-	if err != nil {
-		return nil, err
-	}
-	if lastSuccessNonce != lastPendingNonce {
-		return nil, tracerr.Wrap(fmt.Errorf("lastSuccessNonce (%v) != lastPendingNonce (%v)",
-			lastSuccessNonce, lastPendingNonce))
-	}
-	log.Infow("TxManager started", "nonce", lastSuccessNonce)
+	// accPendingNonce, err := ethClient.EthPendingNonceAt(ctx, *address)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// if accNonce != accPendingNonce {
+	// 	return nil, tracerr.Wrap(fmt.Errorf("currentNonce (%v) != accPendingNonce (%v)",
+	// 		accNonce, accPendingNonce))
+	// }
+	log.Infow("TxManager started", "nonce", accNonce)
 	return &TxManager{
-		cfg:         *cfg,
-		ethClient:   ethClient,
-		l2DB:        l2DB,
-		coord:       coord,
-		batchCh:     make(chan *BatchInfo, queueLen),
-		statsVarsCh: make(chan statsVars, queueLen),
+		cfg:               *cfg,
+		ethClient:         ethClient,
+		l2DB:              l2DB,
+		coord:             coord,
+		batchCh:           make(chan *BatchInfo, queueLen),
+		statsVarsCh:       make(chan statsVars, queueLen),
+		discardPipelineCh: make(chan int, queueLen),
 		account: accounts.Account{
 			Address: *address,
 		},
@@ -84,8 +95,11 @@ func NewTxManager(ctx context.Context, cfg *Config, ethClient eth.ClientInterfac
 
 		vars: *initSCVars,
 
-		lastSuccessNonce: lastSuccessNonce,
-		lastPendingNonce: lastPendingNonce,
+		minPipelineNum: 0,
+		queue:          NewQueue(),
+		accNonce:       accNonce,
+		accNextNonce:   accNonce,
+		// accPendingNonce: accPendingNonce,
 	}, nil
 }
 
@@ -102,6 +116,15 @@ func (t *TxManager) AddBatch(ctx context.Context, batchInfo *BatchInfo) {
 func (t *TxManager) SetSyncStatsVars(ctx context.Context, stats *synchronizer.Stats, vars *synchronizer.SCVariablesPtr) {
 	select {
 	case t.statsVarsCh <- statsVars{Stats: *stats, Vars: *vars}:
+	case <-ctx.Done():
+	}
+}
+
+// DiscardPipeline is a thread safe method to notify about a discarded pipeline
+// due to a reorg
+func (t *TxManager) DiscardPipeline(ctx context.Context, pipelineNum int) {
+	select {
+	case t.discardPipelineCh <- pipelineNum:
 	case <-ctx.Done():
 	}
 }
@@ -157,18 +180,52 @@ func (t *TxManager) shouldSendRollupForgeBatch(batchInfo *BatchInfo) error {
 	return nil
 }
 
-func (t *TxManager) sendRollupForgeBatch(ctx context.Context, batchInfo *BatchInfo) error {
+func addPerc(v *big.Int, p int64) *big.Int {
+	r := new(big.Int).Set(v)
+	r.Mul(r, big.NewInt(p))
+	r.Div(r, big.NewInt(100))
+	return r.Add(v, r)
+}
+
+func (t *TxManager) sendRollupForgeBatch(ctx context.Context, batchInfo *BatchInfo, resend bool) error {
 	var ethTx *types.Transaction
 	var err error
 	auth, err := t.NewAuth(ctx)
 	if err != nil {
 		return tracerr.Wrap(err)
 	}
-	auth.Nonce = big.NewInt(int64(t.lastPendingNonce))
-	t.lastPendingNonce++
+	auth.Nonce = big.NewInt(int64(t.accNextNonce))
+	if resend {
+		auth.Nonce = big.NewInt(int64(batchInfo.EthTx.Nonce()))
+	}
 	for attempt := 0; attempt < t.cfg.EthClientAttempts; attempt++ {
+		if auth.GasPrice.Cmp(t.cfg.MaxGasPrice) > 0 {
+			return tracerr.Wrap(fmt.Errorf("calculated gasPrice (%v) > maxGasPrice (%v)",
+				auth.GasPrice, t.cfg.MaxGasPrice))
+		}
+		// RollupForgeBatch() calls ethclient.SendTransaction()
 		ethTx, err = t.ethClient.RollupForgeBatch(batchInfo.ForgeBatchArgs, auth)
-		if err != nil {
+		if errors.Is(err, core.ErrNonceTooLow) {
+			log.Warnw("TxManager ethClient.RollupForgeBatch incrementing nonce",
+				"err", err, "nonce", auth.Nonce, "batchNum", batchInfo.BatchNum)
+			auth.Nonce.Add(auth.Nonce, big.NewInt(1))
+			attempt--
+		} else if errors.Is(err, core.ErrNonceTooHigh) {
+			log.Warnw("TxManager ethClient.RollupForgeBatch decrementing nonce",
+				"err", err, "nonce", auth.Nonce, "batchNum", batchInfo.BatchNum)
+			auth.Nonce.Sub(auth.Nonce, big.NewInt(1))
+			attempt--
+		} else if errors.Is(err, core.ErrUnderpriced) {
+			log.Warnw("TxManager ethClient.RollupForgeBatch incrementing gasPrice",
+				"err", err, "gasPrice", auth.GasPrice, "batchNum", batchInfo.BatchNum)
+			auth.GasPrice = addPerc(auth.GasPrice, 10)
+			attempt--
+		} else if errors.Is(err, core.ErrReplaceUnderpriced) {
+			log.Warnw("TxManager ethClient.RollupForgeBatch incrementing gasPrice",
+				"err", err, "gasPrice", auth.GasPrice, "batchNum", batchInfo.BatchNum)
+			auth.GasPrice = addPerc(auth.GasPrice, 10)
+			attempt--
+		} else if err != nil {
 			log.Errorw("TxManager ethClient.RollupForgeBatch",
 				"attempt", attempt, "err", err, "block", t.stats.Eth.LastBlock.Num+1,
 				"batchNum", batchInfo.BatchNum)
@@ -184,11 +241,17 @@ func (t *TxManager) sendRollupForgeBatch(ctx context.Context, batchInfo *BatchIn
 	if err != nil {
 		return tracerr.Wrap(fmt.Errorf("reached max attempts for ethClient.RollupForgeBatch: %w", err))
 	}
+	if !resend {
+		t.accNextNonce = auth.Nonce.Uint64() + 1
+	}
 	batchInfo.EthTx = ethTx
-	log.Infow("TxManager ethClient.RollupForgeBatch", "batch", batchInfo.BatchNum, "tx", ethTx.Hash().Hex())
+	log.Infow("TxManager ethClient.RollupForgeBatch", "batch", batchInfo.BatchNum, "tx", ethTx.Hash())
 	now := time.Now()
 	batchInfo.SendTimestamp = now
 
+	if resend {
+		batchInfo.Debug.ResendNum++
+	}
 	batchInfo.Debug.Status = StatusSent
 	batchInfo.Debug.SendBlockNum = t.stats.Eth.LastBlock.Num + 1
 	batchInfo.Debug.SendTimestamp = batchInfo.SendTimestamp
@@ -196,9 +259,11 @@ func (t *TxManager) sendRollupForgeBatch(ctx context.Context, batchInfo *BatchIn
 		batchInfo.Debug.StartTimestamp).Seconds()
 	t.cfg.debugBatchStore(batchInfo)
 
-	t.lastPendingBatch = batchInfo.BatchNum
-	if batchInfo.L1Batch {
-		t.lastSentL1BatchBlockNum = t.stats.Eth.LastBlock.Num + 1
+	// t.lastPendingBatch = batchInfo.BatchNum
+	if !resend {
+		if batchInfo.L1Batch {
+			t.lastSentL1BatchBlockNum = t.stats.Eth.LastBlock.Num + 1
+		}
 	}
 	if err := t.l2DB.DoneForging(common.TxIDsFromL2Txs(batchInfo.L2Txs), batchInfo.BatchNum); err != nil {
 		return tracerr.Wrap(err)
@@ -242,14 +307,14 @@ func (t *TxManager) checkEthTransactionReceipt(ctx context.Context, batchInfo *B
 func (t *TxManager) handleReceipt(ctx context.Context, batchInfo *BatchInfo) (*int64, error) {
 	receipt := batchInfo.Receipt
 	if receipt != nil {
-		if batchInfo.EthTx.Nonce > t.lastSuccessNonce {
-			t.lastSuccessNonce = batchInfo.EthTx.Nonce
+		if batchInfo.EthTx.Nonce()+1 > t.accNonce {
+			t.accNonce = batchInfo.EthTx.Nonce() + 1
 		}
 		if receipt.Status == types.ReceiptStatusFailed {
 			batchInfo.Debug.Status = StatusFailed
 			t.cfg.debugBatchStore(batchInfo)
 			_, err := t.ethClient.EthCall(ctx, batchInfo.EthTx, receipt.BlockNumber)
-			log.Warnw("TxManager receipt status is failed", "tx", receipt.TxHash.Hex(),
+			log.Warnw("TxManager receipt status is failed", "tx", receipt.TxHash,
 				"batch", batchInfo.BatchNum, "block", receipt.BlockNumber.Int64(),
 				"err", err)
 			if batchInfo.BatchNum <= t.lastSuccessBatch {
@@ -262,9 +327,17 @@ func (t *TxManager) handleReceipt(ctx context.Context, batchInfo *BatchInfo) (*i
 			batchInfo.Debug.MineBlockNum = receipt.BlockNumber.Int64()
 			batchInfo.Debug.StartToMineBlocksDelay = batchInfo.Debug.MineBlockNum -
 				batchInfo.Debug.StartBlockNum
-			now := time.Now()
-			batchInfo.Debug.StartToMineDelay = now.Sub(
-				batchInfo.Debug.StartTimestamp).Seconds()
+			if batchInfo.Debug.StartToMineDelay == 0 {
+				if block, err := t.ethClient.EthBlockByNumber(ctx,
+					receipt.BlockNumber.Int64()); err != nil {
+					log.Warnw("TxManager: ethClient.EthBlockByNumber", "err", err)
+				} else {
+					batchInfo.Debug.SendToMineDelay = block.Timestamp.Sub(
+						batchInfo.Debug.SendTimestamp).Seconds()
+					batchInfo.Debug.StartToMineDelay = block.Timestamp.Sub(
+						batchInfo.Debug.StartTimestamp).Seconds()
+				}
+			}
 			t.cfg.debugBatchStore(batchInfo)
 			if batchInfo.BatchNum > t.lastSuccessBatch {
 				t.lastSuccessBatch = batchInfo.BatchNum
@@ -279,9 +352,62 @@ func (t *TxManager) handleReceipt(ctx context.Context, batchInfo *BatchInfo) (*i
 // TODO:
 // - After sending a message: CancelPipeline, stop all consecutive pending Batches (transactions)
 
+type Queue struct {
+	list []*BatchInfo
+	// nonceByBatchNum map[common.BatchNum]uint64
+	next int
+}
+
+func NewQueue() Queue {
+	return Queue{
+		list: make([]*BatchInfo, 0),
+		// nonceByBatchNum: make(map[common.BatchNum]uint64),
+		next: 0,
+	}
+}
+
+func (q *Queue) Len() int {
+	return len(q.list)
+}
+
+func (q *Queue) At(position int) *BatchInfo {
+	if position >= len(q.list) {
+		return nil
+	}
+	return q.list[position]
+}
+
+func (q *Queue) Next() (int, *BatchInfo) {
+	if len(q.list) == 0 {
+		return 0, nil
+	}
+	defer func() { q.next = (q.next + 1) % len(q.list) }()
+	return q.next, q.list[q.next]
+}
+
+func (q *Queue) Remove(position int) {
+	// batchInfo := q.list[position]
+	// delete(q.nonceByBatchNum, batchInfo.BatchNum)
+	q.list = append(q.list[:position], q.list[position+1:]...)
+	if len(q.list) == 0 {
+		q.next = 0
+	} else {
+		q.next = position % len(q.list)
+	}
+}
+
+func (q *Queue) Push(batchInfo *BatchInfo) {
+	q.list = append(q.list, batchInfo)
+	// q.nonceByBatchNum[batchInfo.BatchNum] = batchInfo.EthTx.Nonce()
+}
+
+// func (q *Queue) NonceByBatchNum(batchNum common.BatchNum) (uint64, bool) {
+// 	nonce, ok := q.nonceByBatchNum[batchNum]
+// 	return nonce, ok
+// }
+
 // Run the TxManager
 func (t *TxManager) Run(ctx context.Context) {
-	next := 0
 	waitDuration := longWaitDuration
 
 	var statsVars statsVars
@@ -292,7 +418,7 @@ func (t *TxManager) Run(ctx context.Context) {
 	t.stats = statsVars.Stats
 	t.syncSCVars(statsVars.Vars)
 	log.Infow("TxManager: received initial statsVars",
-		"block", t.stats.Eth.LastBlock.Num, "batch", t.stats.Eth.LastBatch)
+		"block", t.stats.Eth.LastBlock.Num, "batch", t.stats.Eth.LastBatchNum)
 
 	for {
 		select {
@@ -302,7 +428,19 @@ func (t *TxManager) Run(ctx context.Context) {
 		case statsVars := <-t.statsVarsCh:
 			t.stats = statsVars.Stats
 			t.syncSCVars(statsVars.Vars)
+		case pipelineNum := <-t.discardPipelineCh:
+			t.minPipelineNum = pipelineNum + 1
+			if err := t.removeBadBatchInfos(ctx); ctx.Err() != nil {
+				continue
+			} else if err != nil {
+				log.Errorw("TxManager: removeBadBatchInfos", "err", err)
+				continue
+			}
 		case batchInfo := <-t.batchCh:
+			if batchInfo.PipelineNum < t.minPipelineNum {
+				log.Warnw("TxManager: batchInfo received pipelineNum < minPipelineNum",
+					"num", batchInfo.PipelineNum, "minNum", t.minPipelineNum)
+			}
 			if err := t.shouldSendRollupForgeBatch(batchInfo); err != nil {
 				log.Warnw("TxManager: shouldSend", "err", err,
 					"batch", batchInfo.BatchNum)
@@ -310,7 +448,7 @@ func (t *TxManager) Run(ctx context.Context) {
 					Reason: fmt.Sprintf("forgeBatch shouldSend: %v", err)})
 				continue
 			}
-			if err := t.sendRollupForgeBatch(ctx, batchInfo); ctx.Err() != nil {
+			if err := t.sendRollupForgeBatch(ctx, batchInfo, false); ctx.Err() != nil {
 				continue
 			} else if err != nil {
 				// If we reach here it's because our ethNode has
@@ -324,16 +462,14 @@ func (t *TxManager) Run(ctx context.Context) {
 					Reason: fmt.Sprintf("forgeBatch send: %v", err)})
 				continue
 			}
-			t.queue = append(t.queue, batchInfo)
+			t.queue.Push(batchInfo)
 			waitDuration = t.cfg.TxManagerCheckInterval
 		case <-time.After(waitDuration):
-			if len(t.queue) == 0 {
+			queuePosition, batchInfo := t.queue.Next()
+			if batchInfo == nil {
 				waitDuration = longWaitDuration
 				continue
 			}
-			current := next
-			next = (current + 1) % len(t.queue)
-			batchInfo := t.queue[current]
 			if err := t.checkEthTransactionReceipt(ctx, batchInfo); ctx.Err() != nil {
 				continue
 			} else if err != nil { //nolint:staticcheck
@@ -352,35 +488,93 @@ func (t *TxManager) Run(ctx context.Context) {
 				continue
 			} else if err != nil { //nolint:staticcheck
 				// Transaction was rejected
-				next = t.removeFromQueue(current)
+				if err := t.removeBadBatchInfos(ctx); ctx.Err() != nil {
+					continue
+				} else if err != nil {
+					log.Errorw("TxManager: removeBadBatchInfos", "err", err)
+					continue
+				}
 				t.coord.SendMsg(ctx, MsgStopPipeline{
 					Reason: fmt.Sprintf("forgeBatch reject: %v", err)})
 				continue
 			}
 			now := time.Now()
-			if confirm == nil && batchInfo.SendTimestamp > t.cfg.EthTxResendTimeout {
-				log.Infow("TxManager: forgeBatch tx not been mined timeout",
-					"tx", batchInfo.EthTx.Hex(), "batch", batchInfo.BatchNum)
-				// TODO: Resend Tx with same nonce
+			if confirm == nil && now.Sub(batchInfo.SendTimestamp) > t.cfg.EthTxResendTimeout {
+				log.Infow("TxManager: forgeBatch tx not been mined timeout, resending",
+					"tx", batchInfo.EthTx.Hash(), "batch", batchInfo.BatchNum)
+				if err := t.sendRollupForgeBatch(ctx, batchInfo, true); ctx.Err() != nil {
+					continue
+				} else if err != nil {
+					// If we reach here it's because our ethNode has
+					// been unable to send the transaction to
+					// ethereum.  This could be due to the ethNode
+					// failure, or an invalid transaction (that
+					// can't be mined)
+					log.Warnw("TxManager: forgeBatch resend failed", "err", err,
+						"batch", batchInfo.BatchNum)
+					t.coord.SendMsg(ctx, MsgStopPipeline{
+						Reason: fmt.Sprintf("forgeBatch resend: %v", err)})
+					continue
+				}
+
 			}
 			if confirm != nil && *confirm >= t.cfg.ConfirmBlocks {
 				log.Debugw("TxManager: forgeBatch tx confirmed",
-					"tx", batchInfo.EthTx.Hex(), "batch", batchInfo.BatchNum)
-				next = t.removeFromQueue(current)
+					"tx", batchInfo.EthTx.Hash(), "batch", batchInfo.BatchNum)
+				t.queue.Remove(queuePosition)
 			}
 		}
 	}
 }
 
-// Removes batchInfo at position from the queue, and returns the next position
-func (t *TxManager) removeFromQueue(position int) (next int) {
-	t.queue = append(t.queue[:current], t.queue[current+1:]...)
-	if len(t.queue) == 0 {
-		next = 0
-	} else {
-		next = current % len(t.queue)
+func (t *TxManager) removeBadBatchInfos(ctx context.Context) error {
+	next := 0
+	// batchNum := 0
+	for {
+		batchInfo := t.queue.At(next)
+		if batchInfo == nil {
+			break
+		}
+		if err := t.checkEthTransactionReceipt(ctx, batchInfo); ctx.Err() != nil {
+			return nil
+		} else if err != nil {
+			// Our ethNode is giving an error different
+			// than "not found" when getting the receipt
+			// for the transaction, so we can't figure out
+			// if it was not mined, mined and succesfull or
+			// mined and failed.  This could be due to the
+			// ethNode failure.
+			next++
+			continue
+		}
+		confirm, err := t.handleReceipt(ctx, batchInfo)
+		if ctx.Err() != nil {
+			return nil
+		} else if err != nil {
+			// Transaction was rejected
+			if t.minPipelineNum <= batchInfo.PipelineNum {
+				t.minPipelineNum = batchInfo.PipelineNum + 1
+			}
+			t.queue.Remove(next)
+			continue
+		}
+		// If tx is pending but is from a cancelled pipeline, remove it
+		// from the queue
+		if confirm == nil {
+			if batchInfo.PipelineNum < t.minPipelineNum {
+				// batchNum++
+				t.queue.Remove(next)
+				continue
+			}
+		}
+		next++
 	}
-	return next
+	accNonce, err := t.ethClient.EthNonceAt(ctx, t.account.Address, nil)
+	if err != nil {
+		return err
+	}
+	t.accNextNonce = accNonce
+	return nil
 }
 
 func (t *TxManager) canForgeAt(blockNum int64) bool {
