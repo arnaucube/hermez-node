@@ -302,6 +302,7 @@ func NewNode(mode Mode, cfg *config.Node) (*Node, error) {
 				SyncRetryInterval:      cfg.Coordinator.SyncRetryInterval.Duration,
 				EthClientAttempts:      cfg.Coordinator.EthClient.Attempts,
 				EthClientAttemptsDelay: cfg.Coordinator.EthClient.AttemptsDelay.Duration,
+				EthNoReuseNonce:        cfg.Coordinator.EthClient.NoReuseNonce,
 				EthTxResendTimeout:     cfg.Coordinator.EthClient.TxResendTimeout.Duration,
 				MaxGasPrice:            cfg.Coordinator.EthClient.MaxGasPrice,
 				TxManagerCheckInterval: cfg.Coordinator.EthClient.CheckLoopInterval.Duration,

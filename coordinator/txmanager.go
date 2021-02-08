@@ -499,7 +499,8 @@ func (t *TxManager) Run(ctx context.Context) {
 				continue
 			}
 			now := time.Now()
-			if confirm == nil && now.Sub(batchInfo.SendTimestamp) > t.cfg.EthTxResendTimeout {
+			if !t.cfg.EthNoReuseNonce && confirm == nil &&
+				now.Sub(batchInfo.SendTimestamp) > t.cfg.EthTxResendTimeout {
 				log.Infow("TxManager: forgeBatch tx not been mined timeout, resending",
 					"tx", batchInfo.EthTx.Hash(), "batch", batchInfo.BatchNum)
 				if err := t.sendRollupForgeBatch(ctx, batchInfo, true); ctx.Err() != nil {
@@ -573,7 +574,9 @@ func (t *TxManager) removeBadBatchInfos(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	t.accNextNonce = accNonce
+	if !t.cfg.EthNoReuseNonce {
+		t.accNextNonce = accNonce
+	}
 	return nil
 }
 

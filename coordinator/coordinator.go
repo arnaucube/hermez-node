@@ -82,6 +82,9 @@ type Config struct {
 	// transaction will be resent (reusing the nonce) with a newly
 	// calculated gas price
 	EthTxResendTimeout time.Duration
+	// EthNoReuseNonce disables reusing nonces of pending transactions for
+	// new replacement transactions
+	EthNoReuseNonce bool
 	// MaxGasPrice is the maximum gas price allowed for ethereum
 	// transactions
 	MaxGasPrice *big.Int

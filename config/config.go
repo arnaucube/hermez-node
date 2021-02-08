@@ -141,6 +141,9 @@ type Coordinator struct {
 		// ethereum transaction will be resent (reusing the nonce) with
 		// a newly calculated gas price
 		TxResendTimeout Duration `validate:"required"`
+		// NoReuseNonce disables reusing nonces of pending transactions for
+		// new replacement transactions
+		NoReuseNonce bool
 		// Keystore is the ethereum keystore where private keys are kept
 		Keystore struct {
 			// Path to the keystore
