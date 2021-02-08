@@ -27,6 +27,7 @@ import (
 	"github.com/hermeznetwork/hermez-node/test/til"
 	"github.com/hermeznetwork/hermez-node/test/txsets"
 	"github.com/hermeznetwork/tracerr"
+	"github.com/stretchr/testify/require"
 )
 
 // Pendinger is an interface that allows getting last returned item ID and PendingItems to be used for building fromItem
@@ -199,7 +200,8 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	hdb := historydb.NewHistoryDB(database)
+	apiConnCon := db.NewAPICnnectionController(1, time.Second)
+	hdb := historydb.NewHistoryDB(database, apiConnCon)
 	if err != nil {
 		panic(err)
 	}
@@ -218,7 +220,7 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	// L2DB
-	l2DB := l2db.NewL2DB(database, 10, 1000, 24*time.Hour)
+	l2DB := l2db.NewL2DB(database, 10, 1000, 24*time.Hour, apiConnCon)
 	test.WipeDB(l2DB.DB()) // this will clean HistoryDB and L2DB
 	// Config (smart contract constants)
 	chainID := uint16(0)
@@ -572,6 +574,73 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	os.Exit(result)
+}
+
+func TestTimeout(t *testing.T) {
+	pass := os.Getenv("POSTGRES_PASS")
+	databaseTO, err := db.InitSQLDB(5432, "localhost", "hermez", pass, "hermez")
+	require.NoError(t, err)
+	apiConnConTO := db.NewAPICnnectionController(1, 100*time.Millisecond)
+	hdbTO := historydb.NewHistoryDB(databaseTO, apiConnConTO)
+	require.NoError(t, err)
+	// L2DB
+	l2DBTO := l2db.NewL2DB(databaseTO, 10, 1000, 24*time.Hour, apiConnConTO)
+
+	// API
+	apiGinTO := gin.Default()
+	apiGinTO.GET("/wait", func(c *gin.Context) {
+		cancel, err := apiConnConTO.Acquire()
+		defer cancel()
+		require.NoError(t, err)
+		defer apiConnConTO.Release()
+		time.Sleep(200 * time.Millisecond)
+	})
+	// Start server
+	serverTO := &http.Server{Addr: ":4444", Handler: apiGinTO}
+	go func() {
+		if err := serverTO.ListenAndServe(); err != nil && tracerr.Unwrap(err) != http.ErrServerClosed {
+			require.NoError(t, err)
+		}
+	}()
+	_config := getConfigTest(0)
+	_, err = NewAPI(
+		true,
+		true,
+		apiGinTO,
+		hdbTO,
+		nil,
+		l2DBTO,
+		&_config,
+	)
+	require.NoError(t, err)
+
+	client := &http.Client{}
+	httpReq, err := http.NewRequest("GET", "http://localhost:4444/tokens", nil)
+	require.NoError(t, err)
+	httpReqWait, err := http.NewRequest("GET", "http://localhost:4444/wait", nil)
+	require.NoError(t, err)
+	// Request that will get timed out
+	go func() {
+		resp, err := client.Do(httpReq)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+		defer resp.Body.Close() //nolint
+		require.NoError(t, err)
+		body, err := ioutil.ReadAll(resp.Body)
+		require.NoError(t, err)
+		// Unmarshal body into return struct
+		msg := &errorMsg{}
+		err = json.Unmarshal(body, msg)
+		require.NoError(t, err)
+		// Check that the error was the expected down
+		require.Equal(t, errSQLTimeout, msg.Message)
+		// Stop server
+		require.NoError(t, serverTO.Shutdown(context.Background()))
+		require.NoError(t, databaseTO.Close())
+	}()
+	// Request that will make the API busy
+	_, err = client.Do(httpReqWait)
+	require.NoError(t, err)
 }
 
 func doGoodReqPaginated(
