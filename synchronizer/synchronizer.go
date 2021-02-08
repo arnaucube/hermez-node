@@ -333,23 +333,25 @@ func (s *Synchronizer) setSlotCoordinator(slot *common.Slot) error {
 	return nil
 }
 
-// firstBatchBlockNum is the blockNum of first batch in that block, if any
-func (s *Synchronizer) getCurrentSlot(reset bool, firstBatchBlockNum *int64) (*common.Slot, error) {
-	slot := common.Slot{
-		SlotNum:          s.stats.Sync.Auction.CurrentSlot.SlotNum,
-		ForgerCommitment: s.stats.Sync.Auction.CurrentSlot.ForgerCommitment,
-	}
+// updateCurrentSlot updates the slot with information of the current slot.
+// The information abouth which coordinator is allowed to forge is only updated
+// when we are Synced.
+// hasBatch is true when the last synced block contained at least one batch.
+func (s *Synchronizer) updateCurrentSlot(slot *common.Slot, reset bool, hasBatch bool) error {
 	// We want the next block because the current one is already mined
 	blockNum := s.stats.Sync.LastBlock.Num + 1
 	slotNum := s.consts.Auction.SlotNum(blockNum)
+	firstBatchBlockNum := s.stats.Sync.LastBlock.Num
 	if reset {
+		// Using this query only to know if there
 		dbFirstBatchBlockNum, err := s.historyDB.GetFirstBatchBlockNumBySlot(slotNum)
 		if err != nil && tracerr.Unwrap(err) != sql.ErrNoRows {
-			return nil, tracerr.Wrap(fmt.Errorf("historyDB.GetFirstBatchBySlot: %w", err))
+			return tracerr.Wrap(fmt.Errorf("historyDB.GetFirstBatchBySlot: %w", err))
 		} else if tracerr.Unwrap(err) == sql.ErrNoRows {
-			firstBatchBlockNum = nil
+			hasBatch = false
 		} else {
-			firstBatchBlockNum = &dbFirstBatchBlockNum
+			hasBatch = true
+			firstBatchBlockNum = dbFirstBatchBlockNum
 		}
 		slot.ForgerCommitment = false
 	} else if slotNum > slot.SlotNum {
@@ -360,11 +362,11 @@ func (s *Synchronizer) getCurrentSlot(reset bool, firstBatchBlockNum *int64) (*c
 	slot.StartBlock, slot.EndBlock = s.consts.Auction.SlotBlocks(slot.SlotNum)
 	// If Synced, update the current coordinator
 	if s.stats.Synced() && blockNum >= s.consts.Auction.GenesisBlockNum {
-		if err := s.setSlotCoordinator(&slot); err != nil {
-			return nil, tracerr.Wrap(err)
+		if err := s.setSlotCoordinator(slot); err != nil {
+			return tracerr.Wrap(err)
 		}
-		if firstBatchBlockNum != nil &&
-			s.consts.Auction.RelativeBlock(*firstBatchBlockNum) <
+		if hasBatch &&
+			s.consts.Auction.RelativeBlock(firstBatchBlockNum) <
 				int64(s.vars.Auction.SlotDeadline) {
 			slot.ForgerCommitment = true
 		}
@@ -373,57 +375,61 @@ func (s *Synchronizer) getCurrentSlot(reset bool, firstBatchBlockNum *int64) (*c
 		// BEGIN SANITY CHECK
 		canForge, err := s.ethClient.AuctionCanForge(slot.Forger, blockNum)
 		if err != nil {
-			return nil, tracerr.Wrap(err)
+			return tracerr.Wrap(err)
 		}
 		if !canForge {
-			return nil, tracerr.Wrap(fmt.Errorf("Synchronized value of forger address for closed slot "+
+			return tracerr.Wrap(fmt.Errorf("Synchronized value of forger address for closed slot "+
 				"differs from smart contract: %+v", slot))
 		}
 		// END SANITY CHECK
 	}
-	return &slot, nil
+	return nil
 }
 
-func (s *Synchronizer) getNextSlot() (*common.Slot, error) {
+// updateNextSlot updates the slot with information of the next slot.
+// The information abouth which coordinator is allowed to forge is only updated
+// when we are Synced.
+func (s *Synchronizer) updateNextSlot(slot *common.Slot) error {
 	// We want the next block because the current one is already mined
 	blockNum := s.stats.Sync.LastBlock.Num + 1
 	slotNum := s.consts.Auction.SlotNum(blockNum) + 1
-	slot := common.Slot{
-		SlotNum:          slotNum,
-		ForgerCommitment: false,
-	}
+	slot.SlotNum = slotNum
+	slot.ForgerCommitment = false
 	slot.StartBlock, slot.EndBlock = s.consts.Auction.SlotBlocks(slot.SlotNum)
 	// If Synced, update the current coordinator
 	if s.stats.Synced() && blockNum >= s.consts.Auction.GenesisBlockNum {
-		if err := s.setSlotCoordinator(&slot); err != nil {
-			return nil, tracerr.Wrap(err)
+		if err := s.setSlotCoordinator(slot); err != nil {
+			return tracerr.Wrap(err)
 		}
 
 		// TODO: Remove this SANITY CHECK once this code is tested enough
 		// BEGIN SANITY CHECK
 		canForge, err := s.ethClient.AuctionCanForge(slot.Forger, slot.StartBlock)
 		if err != nil {
-			return nil, tracerr.Wrap(err)
+			return tracerr.Wrap(err)
 		}
 		if !canForge {
-			return nil, tracerr.Wrap(fmt.Errorf("Synchronized value of forger address for closed slot "+
+			return tracerr.Wrap(fmt.Errorf("Synchronized value of forger address for closed slot "+
 				"differs from smart contract: %+v", slot))
 		}
 		// END SANITY CHECK
 	}
-	return &slot, nil
+	return nil
 }
 
-func (s *Synchronizer) updateCurrentNextSlotIfSync(reset bool, firstBatchBlockNum *int64) error {
-	current, err := s.getCurrentSlot(reset, firstBatchBlockNum)
-	if err != nil {
+// updateCurrentNextSlotIfSync updates the current and next slot.  Information
+// about forger address that is allowed to forge is only updated if we are
+// Synced.
+func (s *Synchronizer) updateCurrentNextSlotIfSync(reset bool, hasBatch bool) error {
+	current := s.stats.Sync.Auction.CurrentSlot
+	next := s.stats.Sync.Auction.NextSlot
+	if err := s.updateCurrentSlot(&current, reset, hasBatch); err != nil {
 		return tracerr.Wrap(err)
 	}
-	next, err := s.getNextSlot()
-	if err != nil {
+	if err := s.updateNextSlot(&next); err != nil {
 		return tracerr.Wrap(err)
 	}
-	s.stats.UpdateCurrentNextSlot(current, next)
+	s.stats.UpdateCurrentNextSlot(&current, &next)
 	return nil
 }
 
@@ -634,11 +640,11 @@ func (s *Synchronizer) Sync2(ctx context.Context,
 			&rollupData.Batches[batchesLen-1].Batch,
 			lastL1BatchBlock, lastForgeL1TxsNum)
 	}
-	var firstBatchBlockNum *int64
+	hasBatch := false
 	if len(rollupData.Batches) > 0 {
-		firstBatchBlockNum = &rollupData.Batches[0].Batch.EthBlockNum
+		hasBatch = true
 	}
-	if err := s.updateCurrentNextSlotIfSync(false, firstBatchBlockNum); err != nil {
+	if err := s.updateCurrentNextSlotIfSync(false, hasBatch); err != nil {
 		return nil, nil, tracerr.Wrap(err)
 	}
 
@@ -757,15 +763,15 @@ func (s *Synchronizer) resetState(block *common.Block) error {
 		s.vars.WDelayer = *wDelayer
 	}
 
-	batchNum, err := s.historyDB.GetLastBatchNum()
+	batch, err := s.historyDB.GetLastBatch()
 	if err != nil && tracerr.Unwrap(err) != sql.ErrNoRows {
 		return tracerr.Wrap(fmt.Errorf("historyDB.GetLastBatchNum: %w", err))
 	}
 	if tracerr.Unwrap(err) == sql.ErrNoRows {
-		batchNum = 0
+		batch = &common.Batch{}
 	}
 
-	err = s.stateDB.Reset(batchNum)
+	err = s.stateDB.Reset(batch.BatchNum)
 	if err != nil {
 		return tracerr.Wrap(fmt.Errorf("stateDB.Reset: %w", err))
 	}
@@ -787,9 +793,9 @@ func (s *Synchronizer) resetState(block *common.Block) error {
 		lastForgeL1TxsNum = &n
 	}
 
-	s.stats.UpdateSync(block, &batchNum, &lastL1BatchBlockNum, lastForgeL1TxsNum)
+	s.stats.UpdateSync(block, batch, &lastL1BatchBlockNum, lastForgeL1TxsNum)
 
-	if err := s.updateCurrentNextSlotIfSync(true, nil); err != nil {
+	if err := s.updateCurrentNextSlotIfSync(true, false); err != nil {
 		return tracerr.Wrap(err)
 	}
 	return nil
