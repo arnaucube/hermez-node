@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -579,7 +580,11 @@ func (n *Node) StartSynchronizer() {
 					if n.ctx.Err() != nil {
 						continue
 					}
-					log.Errorw("Synchronizer.Sync", "err", err)
+					if errors.Is(err, eth.ErrBlockHashMismatchEvent) {
+						log.Warnw("Synchronizer.Sync", "err", err)
+					} else {
+						log.Errorw("Synchronizer.Sync", "err", err)
+					}
 				}
 			}
 		}
