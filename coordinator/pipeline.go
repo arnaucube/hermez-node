@@ -24,6 +24,12 @@ type statsVars struct {
 	Vars  synchronizer.SCVariablesPtr
 }
 
+type state struct {
+	batchNum                     common.BatchNum
+	lastScheduledL1BatchBlockNum int64
+	lastForgeL1TxsNum            int64
+}
+
 // Pipeline manages the forging of batches with parallel server proofs
 type Pipeline struct {
 	num    int
@@ -31,10 +37,11 @@ type Pipeline struct {
 	consts synchronizer.SCConsts
 
 	// state
-	batchNum                     common.BatchNum
-	lastScheduledL1BatchBlockNum int64
-	lastForgeL1TxsNum            int64
-	started                      bool
+	state state
+	// batchNum                     common.BatchNum
+	// lastScheduledL1BatchBlockNum int64
+	// lastForgeL1TxsNum            int64
+	started bool
 
 	proversPool  *ProversPool
 	provers      []prover.Client
@@ -107,17 +114,19 @@ func (p *Pipeline) SetSyncStatsVars(ctx context.Context, stats *synchronizer.Sta
 // reset pipeline state
 func (p *Pipeline) reset(batchNum common.BatchNum,
 	stats *synchronizer.Stats, vars *synchronizer.SCVariables) error {
-	p.batchNum = batchNum
-	p.lastForgeL1TxsNum = stats.Sync.LastForgeL1TxsNum
+	p.state = state{
+		batchNum:                     batchNum,
+		lastForgeL1TxsNum:            stats.Sync.LastForgeL1TxsNum,
+		lastScheduledL1BatchBlockNum: 0,
+	}
 	p.stats = *stats
 	p.vars = *vars
-	p.lastScheduledL1BatchBlockNum = 0
 
-	err := p.txSelector.Reset(p.batchNum)
+	err := p.txSelector.Reset(p.state.batchNum)
 	if err != nil {
 		return tracerr.Wrap(err)
 	}
-	err = p.batchBuilder.Reset(p.batchNum, true)
+	err = p.batchBuilder.Reset(p.state.batchNum, true)
 	if err != nil {
 		return tracerr.Wrap(err)
 	}
@@ -138,7 +147,7 @@ func (p *Pipeline) handleForgeBatch(ctx context.Context, batchNum common.BatchNu
 	} else if err != nil {
 		if tracerr.Unwrap(err) == errLastL1BatchNotSynced {
 			log.Warnw("forgeBatch: scheduled L1Batch too early", "err", err,
-				"lastForgeL1TxsNum", p.lastForgeL1TxsNum,
+				"lastForgeL1TxsNum", p.state.lastForgeL1TxsNum,
 				"syncLastForgeL1TxsNum", p.stats.Sync.LastForgeL1TxsNum)
 		} else {
 			log.Errorw("forgeBatch", "err", err)
@@ -194,7 +203,7 @@ func (p *Pipeline) Start(batchNum common.BatchNum,
 				p.stats = statsVars.Stats
 				p.syncSCVars(statsVars.Vars)
 			case <-time.After(waitDuration):
-				batchNum = p.batchNum + 1
+				batchNum = p.state.batchNum + 1
 				batchInfo, err := p.handleForgeBatch(p.ctx, batchNum)
 				if p.ctx.Err() != nil {
 					continue
@@ -202,7 +211,7 @@ func (p *Pipeline) Start(batchNum common.BatchNum,
 					waitDuration = p.cfg.SyncRetryInterval
 					continue
 				}
-				p.batchNum = batchNum
+				p.state.batchNum = batchNum
 				select {
 				case batchChSentServerProof <- batchInfo:
 				case <-p.ctx.Done():
@@ -302,15 +311,15 @@ func (p *Pipeline) forgeBatch(batchNum common.BatchNum) (batchInfo *BatchInfo, e
 			// If there's no error, update the parameters related
 			// to the last L1Batch forged
 			if err == nil {
-				p.lastScheduledL1BatchBlockNum = p.stats.Eth.LastBlock.Num + 1
-				p.lastForgeL1TxsNum++
+				p.state.lastScheduledL1BatchBlockNum = p.stats.Eth.LastBlock.Num + 1
+				p.state.lastForgeL1TxsNum++
 			}
 		}()
-		if p.lastForgeL1TxsNum != p.stats.Sync.LastForgeL1TxsNum {
+		if p.state.lastForgeL1TxsNum != p.stats.Sync.LastForgeL1TxsNum {
 			return nil, tracerr.Wrap(errLastL1BatchNotSynced)
 		}
 		// 2a: L1+L2 txs
-		l1UserTxs, err := p.historyDB.GetUnforgedL1UserTxs(p.lastForgeL1TxsNum + 1)
+		l1UserTxs, err := p.historyDB.GetUnforgedL1UserTxs(p.state.lastForgeL1TxsNum + 1)
 		if err != nil {
 			return nil, tracerr.Wrap(err)
 		}
@@ -394,12 +403,12 @@ func (p *Pipeline) waitServerProof(ctx context.Context, batchInfo *BatchInfo) er
 func (p *Pipeline) shouldL1L2Batch(batchInfo *BatchInfo) bool {
 	// Take the lastL1BatchBlockNum as the biggest between the last
 	// scheduled one, and the synchronized one.
-	lastL1BatchBlockNum := p.lastScheduledL1BatchBlockNum
+	lastL1BatchBlockNum := p.state.lastScheduledL1BatchBlockNum
 	if p.stats.Sync.LastL1BatchBlock > lastL1BatchBlockNum {
 		lastL1BatchBlockNum = p.stats.Sync.LastL1BatchBlock
 	}
 	// Set Debug information
-	batchInfo.Debug.LastScheduledL1BatchBlockNum = p.lastScheduledL1BatchBlockNum
+	batchInfo.Debug.LastScheduledL1BatchBlockNum = p.state.lastScheduledL1BatchBlockNum
 	batchInfo.Debug.LastL1BatchBlock = p.stats.Sync.LastL1BatchBlock
 	batchInfo.Debug.LastL1BatchBlockDelta = p.stats.Eth.LastBlock.Num + 1 - lastL1BatchBlockNum
 	batchInfo.Debug.L1BatchBlockScheduleDeadline =
