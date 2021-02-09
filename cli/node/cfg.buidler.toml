@@ -89,9 +89,10 @@ CheckLoopInterval = "500ms"
 Attempts = 4
 AttemptsDelay = "500ms"
 TxResendTimeout = "2m"
+NoReuseNonce = false
 CallGasLimit = 300000
 GasPriceDiv = 100
-MaxGasPrice = "0"
+MaxGasPrice = "5000000000"
 
 [Coordinator.EthClient.Keystore]
 Path = "/tmp/iden3-test/hermez/ethkeystore"

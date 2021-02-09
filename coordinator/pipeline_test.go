@@ -77,7 +77,7 @@ func TestPipelineShouldL1L2Batch(t *testing.T) {
 	//
 	// Scheduled L1Batch
 	//
-	pipeline.lastScheduledL1BatchBlockNum = startBlock
+	pipeline.state.lastScheduledL1BatchBlockNum = startBlock
 	stats.Sync.LastL1BatchBlock = startBlock - 10
 
 	// We are are one block before the timeout range * 0.5
