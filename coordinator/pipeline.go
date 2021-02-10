@@ -311,7 +311,6 @@ func (p *Pipeline) Start(batchNum common.BatchNum,
 					continue
 				}
 				err := p.waitServerProof(p.ctx, batchInfo)
-				batchInfo.ServerProof = nil
 				if p.ctx.Err() != nil {
 					continue
 				} else if err != nil {
@@ -326,6 +325,7 @@ func (p *Pipeline) Start(batchNum common.BatchNum,
 				}
 				// We are done with this serverProof, add it back to the pool
 				p.proversPool.Add(p.ctx, batchInfo.ServerProof)
+				// batchInfo.ServerProof = nil
 				p.txManager.AddBatch(p.ctx, batchInfo)
 			}
 		}

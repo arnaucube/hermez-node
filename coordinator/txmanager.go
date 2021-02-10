@@ -140,6 +140,7 @@ func (t *TxManager) NewAuth(ctx context.Context) (*bind.TransactOpts, error) {
 		return nil, tracerr.Wrap(err)
 	}
 	inc := new(big.Int).Set(gasPrice)
+	// TODO: Replace this by a value of percentage
 	const gasPriceDiv = 100
 	inc.Div(inc, new(big.Int).SetUint64(gasPriceDiv))
 	gasPrice.Add(gasPrice, inc)
