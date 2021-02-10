@@ -38,7 +38,7 @@ var (
 )
 
 func retSQLErr(err error, c *gin.Context) {
-	log.Warn("HTTP API SQL request error", "err", err)
+	log.Warnw("HTTP API SQL request error", "err", err)
 	if sqlErr, ok := tracerr.Unwrap(err).(*pq.Error); ok {
 		// https://www.postgresql.org/docs/current/errcodes-appendix.html
 		if sqlErr.Code == "23505" {
@@ -59,7 +59,7 @@ func retSQLErr(err error, c *gin.Context) {
 }
 
 func retBadReq(err error, c *gin.Context) {
-	log.Warn("HTTP API Bad request error", "err", err)
+	log.Warnw("HTTP API Bad request error", "err", err)
 	c.JSON(http.StatusBadRequest, errorMsg{
 		Message: err.Error(),
 	})
