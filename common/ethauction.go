@@ -32,10 +32,9 @@ type AuctionConstants struct {
 func (c *AuctionConstants) SlotNum(blockNum int64) int64 {
 	if blockNum >= c.GenesisBlockNum {
 		return (blockNum - c.GenesisBlockNum) / int64(c.BlocksPerSlot)
-	} else {
-		// This result will be negative
-		return (blockNum - c.GenesisBlockNum) / int64(c.BlocksPerSlot)
 	}
+	// This result will be negative
+	return (blockNum - c.GenesisBlockNum) / int64(c.BlocksPerSlot)
 }
 
 // SlotBlocks returns the first and the last block numbers included in that slot

@@ -27,6 +27,7 @@ type Batch struct {
 	TotalFeesUSD       *float64             `meddler:"total_fees_usd"`
 }
 
+// NewEmptyBatch creates a new empty batch
 func NewEmptyBatch() *Batch {
 	return &Batch{
 		BatchNum:           0,

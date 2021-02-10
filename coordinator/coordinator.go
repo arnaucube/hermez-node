@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/big"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -47,7 +46,7 @@ type Config struct {
 	// starting the pipeline when we reach a slot in which we can forge.
 	StartSlotBlocksDelay int64
 	// ScheduleBatchBlocksAheadCheck is the number of blocks ahead in which
-	// the forger address is checked to be allowed to forge (appart from
+	// the forger address is checked to be allowed to forge (apart from
 	// checking the next block), used to decide when to stop scheduling new
 	// batches (by stopping the pipeline).
 	// For example, if we are at block 10 and ScheduleBatchBlocksAheadCheck
@@ -57,7 +56,7 @@ type Config struct {
 	// scheduling a batch and having it mined.
 	ScheduleBatchBlocksAheadCheck int64
 	// SendBatchBlocksMarginCheck is the number of margin blocks ahead in
-	// which the coordinator is also checked to be allowed to forge, appart
+	// which the coordinator is also checked to be allowed to forge, apart
 	// from the next block; used to decide when to stop sending batches to
 	// the smart contract.
 	// For example, if we are at block 10 and SendBatchBlocksMarginCheck is
@@ -139,7 +138,8 @@ type Coordinator struct {
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
 
-	pipeline *Pipeline
+	pipeline              *Pipeline
+	lastNonFailedBatchNum common.BatchNum
 
 	purger    *Purger
 	txManager *TxManager
@@ -233,7 +233,7 @@ func (c *Coordinator) BatchBuilder() *batchbuilder.BatchBuilder {
 func (c *Coordinator) newPipeline(ctx context.Context) (*Pipeline, error) {
 	c.pipelineNum++
 	return NewPipeline(ctx, c.cfg, c.pipelineNum, c.historyDB, c.l2DB, c.txSelector,
-		c.batchBuilder, c.purger, c.txManager, c.provers, &c.consts)
+		c.batchBuilder, c.purger, c, c.txManager, c.provers, &c.consts)
 }
 
 // MsgSyncBlock indicates an update to the Synchronizer stats
@@ -254,6 +254,9 @@ type MsgSyncReorg struct {
 // MsgStopPipeline indicates a signal to reset the pipeline
 type MsgStopPipeline struct {
 	Reason string
+	// FailedBatchNum indicates the first batchNum that faile in the
+	// pipeline.  If FailedBatchNum is 0, it should be ignored.
+	FailedBatchNum common.BatchNum
 }
 
 // SendMsg is a thread safe method to pass a message to the Coordinator
@@ -342,6 +345,9 @@ func (c *Coordinator) syncStats(ctx context.Context, stats *synchronizer.Stats) 
 			log.Infow("Coordinator: forging state begin", "block",
 				stats.Eth.LastBlock.Num+1, "batch", stats.Sync.LastBatch.BatchNum)
 			batchNum := stats.Sync.LastBatch.BatchNum
+			if c.lastNonFailedBatchNum > batchNum {
+				batchNum = c.lastNonFailedBatchNum
+			}
 			var err error
 			if c.pipeline, err = c.newPipeline(ctx); err != nil {
 				return tracerr.Wrap(err)
@@ -367,19 +373,17 @@ func (c *Coordinator) syncStats(ctx context.Context, stats *synchronizer.Stats) 
 		// 		return err
 		// 	}
 		// }
-		if c.purger.CanInvalidate(stats.Sync.LastBlock.Num, int64(stats.Sync.LastBatch.BatchNum)) {
-			if err := c.txSelector.Reset(stats.Sync.LastBatch.BatchNum); err != nil {
-				return tracerr.Wrap(err)
-			}
-		}
-		_, err := c.purger.InvalidateMaybe(c.l2DB, c.txSelector.LocalAccountsDB(),
-			stats.Sync.LastBlock.Num, int64(stats.Sync.LastBatch.BatchNum))
-		if err != nil {
+		// if c.purger.CanInvalidate(stats.Sync.LastBlock.Num, int64(stats.Sync.LastBatch.BatchNum)) {
+		// 	if err := c.txSelector.Reset(stats.Sync.LastBatch.BatchNum); err != nil {
+		// 		return tracerr.Wrap(err)
+		// 	}
+		// }
+		if _, err := c.purger.InvalidateMaybe(c.l2DB, c.txSelector.LocalAccountsDB(),
+			stats.Sync.LastBlock.Num, int64(stats.Sync.LastBatch.BatchNum)); err != nil {
 			return tracerr.Wrap(err)
 		}
-		_, err = c.purger.PurgeMaybe(c.l2DB, stats.Sync.LastBlock.Num,
-			int64(stats.Sync.LastBatch.BatchNum))
-		if err != nil {
+		if _, err := c.purger.PurgeMaybe(c.l2DB, stats.Sync.LastBlock.Num,
+			int64(stats.Sync.LastBatch.BatchNum)); err != nil {
 			return tracerr.Wrap(err)
 		}
 	}
@@ -419,24 +423,29 @@ func (c *Coordinator) handleReorg(ctx context.Context, msg *MsgSyncReorg) error 
 			"sync.LastBatch.StateRoot", c.stats.Sync.LastBatch.StateRoot,
 			"pipelineFromBatch.StateRoot", c.pipelineFromBatch.StateRoot)
 		c.txManager.DiscardPipeline(ctx, c.pipelineNum)
-		if err := c.handleStopPipeline(ctx, "reorg"); err != nil {
+		if err := c.handleStopPipeline(ctx, "reorg", 0); err != nil {
 			return tracerr.Wrap(err)
 		}
 	}
 	return nil
 }
 
-func (c *Coordinator) handleStopPipeline(ctx context.Context, reason string) error {
-	if err := c.l2DB.Reorg(c.stats.Sync.LastBatch.BatchNum); err != nil {
+// handleStopPipeline handles stopping the pipeline.  If failedBatchNum is 0,
+// the next pipeline will start from the last state of the synchronizer,
+// otherwise, it will state from failedBatchNum-1.
+func (c *Coordinator) handleStopPipeline(ctx context.Context, reason string, failedBatchNum common.BatchNum) error {
+	batchNum := c.stats.Sync.LastBatch.BatchNum
+	if failedBatchNum != 0 {
+		batchNum = failedBatchNum - 1
+	}
+	if err := c.l2DB.Reorg(batchNum); err != nil {
 		return tracerr.Wrap(err)
 	}
 	if c.pipeline != nil {
 		c.pipeline.Stop(c.ctx)
 		c.pipeline = nil
 	}
-	if strings.Contains(reason, common.AuctionErrMsgCannotForge) { //nolint:staticcheck
-		// TODO: Check that we are in a slot in which we can't forge
-	}
+	c.lastNonFailedBatchNum = batchNum
 	return nil
 }
 
@@ -452,7 +461,7 @@ func (c *Coordinator) handleMsg(ctx context.Context, msg interface{}) error {
 		}
 	case MsgStopPipeline:
 		log.Infow("Coordinator received MsgStopPipeline", "reason", msg.Reason)
-		if err := c.handleStopPipeline(ctx, msg.Reason); err != nil {
+		if err := c.handleStopPipeline(ctx, msg.Reason, msg.FailedBatchNum); err != nil {
 			return tracerr.Wrap(fmt.Errorf("Coordinator.handleStopPipeline: %w", err))
 		}
 	default:

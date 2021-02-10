@@ -183,7 +183,8 @@ func (t *TxManager) shouldSendRollupForgeBatch(batchInfo *BatchInfo) error {
 func addPerc(v *big.Int, p int64) *big.Int {
 	r := new(big.Int).Set(v)
 	r.Mul(r, big.NewInt(p))
-	r.Div(r, big.NewInt(100))
+	// nolint reason: to calculate percetnages we divide by 100
+	r.Div(r, big.NewInt(100)) //nolit:gomnd
 	return r.Add(v, r)
 }
 
@@ -352,12 +353,14 @@ func (t *TxManager) handleReceipt(ctx context.Context, batchInfo *BatchInfo) (*i
 // TODO:
 // - After sending a message: CancelPipeline, stop all consecutive pending Batches (transactions)
 
+// Queue of BatchInfos
 type Queue struct {
 	list []*BatchInfo
 	// nonceByBatchNum map[common.BatchNum]uint64
 	next int
 }
 
+// NewQueue returns a new queue
 func NewQueue() Queue {
 	return Queue{
 		list: make([]*BatchInfo, 0),
@@ -366,10 +369,12 @@ func NewQueue() Queue {
 	}
 }
 
+// Len is the length of the queue
 func (q *Queue) Len() int {
 	return len(q.list)
 }
 
+// At returns the BatchInfo at position (or nil if position is out of bounds)
 func (q *Queue) At(position int) *BatchInfo {
 	if position >= len(q.list) {
 		return nil
@@ -377,6 +382,7 @@ func (q *Queue) At(position int) *BatchInfo {
 	return q.list[position]
 }
 
+// Next returns the next BatchInfo (or nil if queue is empty)
 func (q *Queue) Next() (int, *BatchInfo) {
 	if len(q.list) == 0 {
 		return 0, nil
@@ -385,6 +391,7 @@ func (q *Queue) Next() (int, *BatchInfo) {
 	return q.next, q.list[q.next]
 }
 
+// Remove removes the BatchInfo at position
 func (q *Queue) Remove(position int) {
 	// batchInfo := q.list[position]
 	// delete(q.nonceByBatchNum, batchInfo.BatchNum)
@@ -396,6 +403,7 @@ func (q *Queue) Remove(position int) {
 	}
 }
 
+// Push adds a new BatchInfo
 func (q *Queue) Push(batchInfo *BatchInfo) {
 	q.list = append(q.list, batchInfo)
 	// q.nonceByBatchNum[batchInfo.BatchNum] = batchInfo.EthTx.Nonce()
@@ -517,8 +525,8 @@ func (t *TxManager) Run(ctx context.Context) {
 						Reason: fmt.Sprintf("forgeBatch resend: %v", err)})
 					continue
 				}
-
 			}
+
 			if confirm != nil && *confirm >= t.cfg.ConfirmBlocks {
 				log.Debugw("TxManager: forgeBatch tx confirmed",
 					"tx", batchInfo.EthTx.Hash(), "batch", batchInfo.BatchNum)
