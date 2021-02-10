@@ -929,8 +929,14 @@ func (s *Synchronizer) rollupSync(ethBlock *common.Block) (*common.RollupData, e
 			return nil, tracerr.Wrap(err)
 		}
 		if s.stateDB.CurrentBatch() != batchNum {
-			return nil, tracerr.Wrap(fmt.Errorf("stateDB.BatchNum (%v) != evtForgeBatch.BatchNum = (%v)",
+			return nil, tracerr.Wrap(fmt.Errorf("stateDB.BatchNum (%v) != "+
+				"evtForgeBatch.BatchNum = (%v)",
 				s.stateDB.CurrentBatch(), batchNum))
+		}
+		if s.stateDB.MT.Root().BigInt().Cmp(forgeBatchArgs.NewStRoot) != 0 {
+			return nil, tracerr.Wrap(fmt.Errorf("stateDB.MTRoot (%v) != "+
+				"forgeBatchArgs.NewStRoot (%v)",
+				s.stateDB.MT.Root().BigInt(), forgeBatchArgs.NewStRoot))
 		}
 
 		// Transform processed PoolL2 txs to L2 and store in BatchData
