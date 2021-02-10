@@ -56,7 +56,7 @@ type Coordinator struct {
 	// starting the pipeline when we reach a slot in which we can forge.
 	StartSlotBlocksDelay int64
 	// ScheduleBatchBlocksAheadCheck is the number of blocks ahead in which
-	// the forger address is checked to be allowed to forge (appart from
+	// the forger address is checked to be allowed to forge (apart from
 	// checking the next block), used to decide when to stop scheduling new
 	// batches (by stopping the pipeline).
 	// For example, if we are at block 10 and ScheduleBatchBlocksAheadCheck
@@ -66,7 +66,7 @@ type Coordinator struct {
 	// scheduling a batch and having it mined.
 	ScheduleBatchBlocksAheadCheck int64
 	// SendBatchBlocksMarginCheck is the number of margin blocks ahead in
-	// which the coordinator is also checked to be allowed to forge, appart
+	// which the coordinator is also checked to be allowed to forge, apart
 	// from the next block; used to decide when to stop sending batches to
 	// the smart contract.
 	// For example, if we are at block 10 and SendBatchBlocksMarginCheck is

@@ -215,6 +215,12 @@ func TestBatches(t *testing.T) {
 	fetchedLastL1BatchBlockNum, err := historyDB.GetLastL1BatchBlockNum()
 	assert.NoError(t, err)
 	assert.Equal(t, lastL1BatchBlockNum, fetchedLastL1BatchBlockNum)
+	// Test GetBatch
+	fetchedBatch, err := historyDB.GetBatch(1)
+	require.NoError(t, err)
+	assert.Equal(t, &batches[0], fetchedBatch)
+	_, err = historyDB.GetBatch(common.BatchNum(len(batches) + 1))
+	assert.Equal(t, sql.ErrNoRows, tracerr.Unwrap(err))
 }
 
 func TestBids(t *testing.T) {
