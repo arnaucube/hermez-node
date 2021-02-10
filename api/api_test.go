@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -588,12 +589,15 @@ func TestTimeout(t *testing.T) {
 
 	// API
 	apiGinTO := gin.Default()
+	finishWait := make(chan interface{})
+	startWait := make(chan interface{})
 	apiGinTO.GET("/wait", func(c *gin.Context) {
 		cancel, err := apiConnConTO.Acquire()
 		defer cancel()
 		require.NoError(t, err)
 		defer apiConnConTO.Release()
-		time.Sleep(200 * time.Millisecond)
+		startWait <- nil
+		<-finishWait
 	})
 	// Start server
 	serverTO := &http.Server{Addr: ":4444", Handler: apiGinTO}
@@ -620,27 +624,33 @@ func TestTimeout(t *testing.T) {
 	httpReqWait, err := http.NewRequest("GET", "http://localhost:4444/wait", nil)
 	require.NoError(t, err)
 	// Request that will get timed out
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
-		resp, err := client.Do(httpReq)
+		// Request that will make the API busy
+		_, err = client.Do(httpReqWait)
 		require.NoError(t, err)
-		require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-		defer resp.Body.Close() //nolint
-		require.NoError(t, err)
-		body, err := ioutil.ReadAll(resp.Body)
-		require.NoError(t, err)
-		// Unmarshal body into return struct
-		msg := &errorMsg{}
-		err = json.Unmarshal(body, msg)
-		require.NoError(t, err)
-		// Check that the error was the expected down
-		require.Equal(t, errSQLTimeout, msg.Message)
-		// Stop server
-		require.NoError(t, serverTO.Shutdown(context.Background()))
-		require.NoError(t, databaseTO.Close())
+		wg.Done()
 	}()
-	// Request that will make the API busy
-	_, err = client.Do(httpReqWait)
+	<-startWait
+	resp, err := client.Do(httpReq)
 	require.NoError(t, err)
+	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	defer resp.Body.Close() //nolint
+	body, err := ioutil.ReadAll(resp.Body)
+	require.NoError(t, err)
+	// Unmarshal body into return struct
+	msg := &errorMsg{}
+	err = json.Unmarshal(body, msg)
+	require.NoError(t, err)
+	// Check that the error was the expected down
+	require.Equal(t, errSQLTimeout, msg.Message)
+	finishWait <- nil
+
+	// Stop server
+	wg.Wait()
+	require.NoError(t, serverTO.Shutdown(context.Background()))
+	require.NoError(t, databaseTO.Close())
 }
 
 func doGoodReqPaginated(
