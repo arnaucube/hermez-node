@@ -105,11 +105,11 @@ func (s *StatsHolder) UpdateEth(ethClient eth.ClientInterface) error {
 
 	lastBlock, err := ethClient.EthBlockByNumber(context.TODO(), -1)
 	if err != nil {
-		return tracerr.Wrap(err)
+		return tracerr.Wrap(fmt.Errorf("EthBlockByNumber: %w", err))
 	}
 	lastBatchNum, err := ethClient.RollupLastForgedBatch()
 	if err != nil {
-		return tracerr.Wrap(err)
+		return tracerr.Wrap(fmt.Errorf("RollupLastForgedBatch: %w", err))
 	}
 	s.rw.Lock()
 	s.Eth.Updated = now
@@ -375,7 +375,7 @@ func (s *Synchronizer) updateCurrentSlot(slot *common.Slot, reset bool, hasBatch
 		// BEGIN SANITY CHECK
 		canForge, err := s.ethClient.AuctionCanForge(slot.Forger, blockNum)
 		if err != nil {
-			return tracerr.Wrap(err)
+			return tracerr.Wrap(fmt.Errorf("AuctionCanForge: %w", err))
 		}
 		if !canForge {
 			return tracerr.Wrap(fmt.Errorf("Synchronized value of forger address for closed slot "+
@@ -406,7 +406,7 @@ func (s *Synchronizer) updateNextSlot(slot *common.Slot) error {
 		// BEGIN SANITY CHECK
 		canForge, err := s.ethClient.AuctionCanForge(slot.Forger, slot.StartBlock)
 		if err != nil {
-			return tracerr.Wrap(err)
+			return tracerr.Wrap(fmt.Errorf("AuctionCanForge: %w", err))
 		}
 		if !canForge {
 			return tracerr.Wrap(fmt.Errorf("Synchronized value of forger address for closed slot "+
@@ -531,7 +531,7 @@ func (s *Synchronizer) Sync2(ctx context.Context,
 	if tracerr.Unwrap(err) == ethereum.NotFound {
 		return nil, nil, nil
 	} else if err != nil {
-		return nil, nil, tracerr.Wrap(err)
+		return nil, nil, tracerr.Wrap(fmt.Errorf("EthBlockByNumber: %w", err))
 	}
 	log.Debugf("ethBlock: num: %v, parent: %v, hash: %v",
 		ethBlock.Num, ethBlock.ParentHash.String(), ethBlock.Hash.String())
@@ -710,15 +710,15 @@ func getInitialVariables(ethClient eth.ClientInterface,
 	consts *SCConsts) (*SCVariables, *StartBlockNums, error) {
 	rollupInit, rollupInitBlock, err := ethClient.RollupEventInit()
 	if err != nil {
-		return nil, nil, tracerr.Wrap(err)
+		return nil, nil, tracerr.Wrap(fmt.Errorf("RollupEventInit: %w", err))
 	}
 	auctionInit, auctionInitBlock, err := ethClient.AuctionEventInit()
 	if err != nil {
-		return nil, nil, tracerr.Wrap(err)
+		return nil, nil, tracerr.Wrap(fmt.Errorf("AuctionEventInit: %w", err))
 	}
 	wDelayerInit, wDelayerInitBlock, err := ethClient.WDelayerEventInit()
 	if err != nil {
-		return nil, nil, tracerr.Wrap(err)
+		return nil, nil, tracerr.Wrap(fmt.Errorf("WDelayerEventInit: %w", err))
 	}
 	rollupVars := rollupInit.RollupVariables()
 	auctionVars := auctionInit.AuctionVariables(consts.Auction.InitialMinimalBidding)
@@ -812,7 +812,7 @@ func (s *Synchronizer) rollupSync(ethBlock *common.Block) (*common.RollupData, e
 	// the expected one.
 	rollupEvents, err := s.ethClient.RollupEventsByBlock(blockNum, &ethBlock.Hash)
 	if err != nil {
-		return nil, tracerr.Wrap(err)
+		return nil, tracerr.Wrap(fmt.Errorf("RollupEventsByBlock: %w", err))
 	}
 	// No events in this block
 	if rollupEvents == nil {
@@ -1122,7 +1122,7 @@ func (s *Synchronizer) auctionSync(ethBlock *common.Block) (*common.AuctionData,
 	// Get auction events in the block
 	auctionEvents, err := s.ethClient.AuctionEventsByBlock(blockNum, &ethBlock.Hash)
 	if err != nil {
-		return nil, tracerr.Wrap(err)
+		return nil, tracerr.Wrap(fmt.Errorf("AuctionEventsByBlock: %w", err))
 	}
 	// No events in this block
 	if auctionEvents == nil {
@@ -1219,7 +1219,7 @@ func (s *Synchronizer) wdelayerSync(ethBlock *common.Block) (*common.WDelayerDat
 	// Get wDelayer events in the block
 	wDelayerEvents, err := s.ethClient.WDelayerEventsByBlock(blockNum, &ethBlock.Hash)
 	if err != nil {
-		return nil, tracerr.Wrap(err)
+		return nil, tracerr.Wrap(fmt.Errorf("WDelayerEventsByBlock: %w", err))
 	}
 	// No events in this block
 	if wDelayerEvents == nil {
