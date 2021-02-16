@@ -405,40 +405,41 @@ func (tp *TxProcessor) ProcessTxs(coordIdxs []common.Idx, l1usertxs, l1coordinat
 		return nil, nil
 	}
 
-	// once all txs processed (exitTree root frozen), for each Exit,
-	// generate common.ExitInfo data
-	var exitInfos []common.ExitInfo
-	exitInfosByIdx := make(map[common.Idx]*common.ExitInfo)
-	for i := 0; i < nTx; i++ {
-		if !exits[i].exit {
-			continue
-		}
-		exitIdx := exits[i].idx
-		exitAccount := exits[i].acc
-
-		// 0. generate MerkleProof
-		p, err := exitTree.GenerateSCVerifierProof(exitIdx.BigInt(), nil)
-		if err != nil {
-			return nil, tracerr.Wrap(err)
-		}
-
-		// 1. generate common.ExitInfo
-		ei := common.ExitInfo{
-			AccountIdx:  exitIdx,
-			MerkleProof: p,
-			Balance:     exitAccount.Balance,
-		}
-		if prevExit, ok := exitInfosByIdx[exitIdx]; !ok {
-			exitInfos = append(exitInfos, ei)
-			exitInfosByIdx[exitIdx] = &exitInfos[len(exitInfos)-1]
-		} else {
-			*prevExit = ei
-		}
-	}
-
 	if tp.s.Type() == statedb.TypeSynchronizer {
-		// retuTypeexitInfos, createdAccounts and collectedFees, so Synchronizer will
-		// be able to store it into HistoryDB for the concrete BatchNum
+		// once all txs processed (exitTree root frozen), for each
+		// Exit, generate common.ExitInfo data
+		var exitInfos []common.ExitInfo
+		exitInfosByIdx := make(map[common.Idx]*common.ExitInfo)
+		for i := 0; i < nTx; i++ {
+			if !exits[i].exit {
+				continue
+			}
+			exitIdx := exits[i].idx
+			exitAccount := exits[i].acc
+
+			// 0. generate MerkleProof
+			p, err := exitTree.GenerateSCVerifierProof(exitIdx.BigInt(), nil)
+			if err != nil {
+				return nil, tracerr.Wrap(err)
+			}
+
+			// 1. generate common.ExitInfo
+			ei := common.ExitInfo{
+				AccountIdx:  exitIdx,
+				MerkleProof: p,
+				Balance:     exitAccount.Balance,
+			}
+			if prevExit, ok := exitInfosByIdx[exitIdx]; !ok {
+				exitInfos = append(exitInfos, ei)
+				exitInfosByIdx[exitIdx] = &exitInfos[len(exitInfos)-1]
+			} else {
+				*prevExit = ei
+			}
+		}
+
+		// return exitInfos, createdAccounts and collectedFees, so
+		// Synchronizer will be able to store it into HistoryDB for the
+		// concrete BatchNum
 		return &ProcessTxOutput{
 			ZKInputs:           nil,
 			ExitInfos:          exitInfos,
