@@ -2,12 +2,16 @@ package debugapi
 
 import (
 	"context"
+	"fmt"
+	"math/big"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/hermeznetwork/hermez-node/common"
+	"github.com/hermeznetwork/hermez-node/db/historydb"
 	"github.com/hermeznetwork/hermez-node/db/statedb"
 	"github.com/hermeznetwork/hermez-node/log"
 	"github.com/hermeznetwork/hermez-node/synchronizer"
@@ -31,20 +35,107 @@ func badReq(err error, c *gin.Context) {
 	})
 }
 
+const (
+	statusUpdating = "updating"
+	statusOK       = "ok"
+)
+
+type tokenBalances struct {
+	sync.RWMutex
+	Value struct {
+		Status   string
+		Block    *common.Block
+		Batch    *common.Batch
+		Balances map[common.TokenID]*big.Int
+	}
+}
+
+func (t *tokenBalances) Update(historyDB *historydb.HistoryDB, sdb *statedb.StateDB) (err error) {
+	var block *common.Block
+	var batch *common.Batch
+	var balances map[common.TokenID]*big.Int
+	defer func() {
+		t.Lock()
+		if err == nil {
+			t.Value.Status = statusOK
+			t.Value.Block = block
+			t.Value.Batch = batch
+			t.Value.Balances = balances
+		} else {
+			t.Value.Status = fmt.Sprintf("tokenBalances.Update: %v", err)
+			t.Value.Block = nil
+			t.Value.Batch = nil
+			t.Value.Balances = nil
+		}
+		t.Unlock()
+	}()
+
+	if block, err = historyDB.GetLastBlock(); err != nil {
+		return tracerr.Wrap(err)
+	}
+	if batch, err = historyDB.GetLastBatch(); err != nil {
+		return tracerr.Wrap(err)
+	}
+	balances = make(map[common.TokenID]*big.Int)
+	sdb.LastRead(func(sdbLast *statedb.Last) error {
+		return tracerr.Wrap(
+			statedb.AccountsIter(sdbLast.DB(), func(a *common.Account) (bool, error) {
+				if balance, ok := balances[a.TokenID]; !ok {
+					balances[a.TokenID] = a.Balance
+				} else {
+					balance.Add(balance, a.Balance)
+				}
+				return true, nil
+			}),
+		)
+	})
+	return nil
+}
+
 // DebugAPI is an http API with debugging endpoints
 type DebugAPI struct {
-	addr    string
-	stateDB *statedb.StateDB // synchronizer statedb
-	sync    *synchronizer.Synchronizer
+	addr          string
+	historyDB     *historydb.HistoryDB
+	stateDB       *statedb.StateDB // synchronizer statedb
+	sync          *synchronizer.Synchronizer
+	tokenBalances tokenBalances
 }
 
 // NewDebugAPI creates a new DebugAPI
-func NewDebugAPI(addr string, stateDB *statedb.StateDB, sync *synchronizer.Synchronizer) *DebugAPI {
+func NewDebugAPI(addr string, historyDB *historydb.HistoryDB, stateDB *statedb.StateDB,
+	sync *synchronizer.Synchronizer) *DebugAPI {
 	return &DebugAPI{
-		addr:    addr,
-		stateDB: stateDB,
-		sync:    sync,
+		addr:      addr,
+		historyDB: historyDB,
+		stateDB:   stateDB,
+		sync:      sync,
 	}
+}
+
+// SyncBlockHook is a hook function that the node will call after every new synchronized block
+func (a *DebugAPI) SyncBlockHook() {
+	a.tokenBalances.RLock()
+	updateTokenBalances := a.tokenBalances.Value.Status == statusUpdating
+	a.tokenBalances.RUnlock()
+	if updateTokenBalances {
+		if err := a.tokenBalances.Update(a.historyDB, a.stateDB); err != nil {
+			log.Errorw("DebugAPI.tokenBalances.Upate", "err", err)
+		}
+	}
+}
+
+func (a *DebugAPI) handleTokenBalances(c *gin.Context) {
+	a.tokenBalances.RLock()
+	tokenBalances := a.tokenBalances.Value
+	a.tokenBalances.RUnlock()
+	c.JSON(http.StatusOK, tokenBalances)
+}
+
+func (a *DebugAPI) handlePostTokenBalances(c *gin.Context) {
+	a.tokenBalances.Lock()
+	a.tokenBalances.Value.Status = statusUpdating
+	a.tokenBalances.Unlock()
+	c.JSON(http.StatusOK, nil)
 }
 
 func (a *DebugAPI) handleAccount(c *gin.Context) {
@@ -114,6 +205,8 @@ func (a *DebugAPI) Run(ctx context.Context) error {
 	// is created.
 	debugAPI.GET("sdb/accounts", a.handleAccounts)
 	debugAPI.GET("sdb/accounts/:Idx", a.handleAccount)
+	debugAPI.POST("sdb/tokenbalances", a.handlePostTokenBalances)
+	debugAPI.GET("sdb/tokenbalances", a.handleTokenBalances)
 
 	debugAPI.GET("sync/stats", a.handleSyncStats)
 

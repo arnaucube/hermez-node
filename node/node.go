@@ -376,7 +376,7 @@ func NewNode(mode Mode, cfg *config.Node) (*Node, error) {
 	}
 	var debugAPI *debugapi.DebugAPI
 	if cfg.Debug.APIAddress != "" {
-		debugAPI = debugapi.NewDebugAPI(cfg.Debug.APIAddress, stateDB, sync)
+		debugAPI = debugapi.NewDebugAPI(cfg.Debug.APIAddress, historyDB, stateDB, sync)
 	}
 	priceUpdater, err := priceupdater.NewPriceUpdater(cfg.PriceUpdater.URL,
 		priceupdater.APIType(cfg.PriceUpdater.Type), historyDB)
@@ -547,6 +547,9 @@ func (n *Node) syncLoopFn(ctx context.Context, lastBlock *common.Block) (*common
 			WDelayer: blockData.WDelayer.Vars,
 		}
 		n.handleNewBlock(ctx, stats, vars, blockData.Rollup.Batches)
+		if n.debugAPI != nil {
+			n.debugAPI.SyncBlockHook()
+		}
 		return &blockData.Block, time.Duration(0), nil
 	} else {
 		// case: no block

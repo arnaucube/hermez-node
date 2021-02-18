@@ -275,7 +275,8 @@ func (s *StateDB) GetAccount(idx common.Idx) (*common.Account, error) {
 	return GetAccountInTreeDB(s.db.DB(), idx)
 }
 
-func accountsIter(db db.Storage, fn func(a *common.Account) (bool, error)) error {
+// AccountsIter iterates over all the accounts in db, calling fn for each one
+func AccountsIter(db db.Storage, fn func(a *common.Account) (bool, error)) error {
 	idxDB := db.WithPrefix(PrefixKeyIdx)
 	if err := idxDB.Iterate(func(k []byte, v []byte) (bool, error) {
 		idx, err := common.IdxFromBytes(k)
