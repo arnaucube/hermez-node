@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewL2Tx(t *testing.T) {
+func TestNewL2TxID(t *testing.T) {
 	l2Tx := &L2Tx{
 		FromIdx: 87654,
 		ToIdx:   300,

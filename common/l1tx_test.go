@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewL1UserTx(t *testing.T) {
+func TestNewL1UserTxID(t *testing.T) {
 	toForge := int64(123456)
 	l1Tx := &L1Tx{
 		ToForgeL1TxsNum: &toForge,
@@ -30,6 +30,38 @@ func TestNewL1UserTx(t *testing.T) {
 	l1Tx, err := NewL1Tx(l1Tx)
 	assert.NoError(t, err)
 	assert.Equal(t, "0x00a6cbae3b8661fb75b0919ca6605a02cfb04d9c6dd16870fa0fcdf01befa32768", l1Tx.TxID.String())
+
+	maxInt64 := 0xFFFF_FFFF_FFFF_FFFF >> 1
+
+	toForge = int64(maxInt64)
+	l1Tx = &L1Tx{
+		ToForgeL1TxsNum: &toForge,
+		Position:        maxInt64,
+		UserOrigin:      true,
+	}
+	l1Tx, err = NewL1Tx(l1Tx)
+	assert.NoError(t, err)
+	assert.Equal(t, "0x001ff31eb325f324652bfe6b607a19e04789e082ee3b779eefe4a466062ea331d9", l1Tx.TxID.String())
+
+	toForge = int64(maxInt64 - 1)
+	l1Tx = &L1Tx{
+		ToForgeL1TxsNum: &toForge,
+		Position:        maxInt64 - 1,
+		UserOrigin:      true,
+	}
+	l1Tx, err = NewL1Tx(l1Tx)
+	assert.NoError(t, err)
+	assert.Equal(t, "0x0003434eca58d35fd85795e3a6cce67c8801deb805ea1f7429cc270aa9f35ea403", l1Tx.TxID.String())
+
+	toForge = int64(0)
+	l1Tx = &L1Tx{
+		ToForgeL1TxsNum: &toForge,
+		Position:        0,
+		UserOrigin:      true,
+	}
+	l1Tx, err = NewL1Tx(l1Tx)
+	assert.NoError(t, err)
+	assert.Equal(t, "0x006bd2dd6bd408cbee33429358bf24fdc64612fbf8b1b4db604518f40ffd34b607", l1Tx.TxID.String())
 }
 
 func TestNewL1CoordinatorTx(t *testing.T) {
