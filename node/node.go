@@ -426,6 +426,114 @@ func NewNode(mode Mode, cfg *config.Node) (*Node, error) {
 	}, nil
 }
 
+// APIServer is a server that only runs the API
+type APIServer struct {
+	nodeAPI *NodeAPI
+}
+
+func NewAPIServer(mode Mode, cfg *config.APIServer) (*APIServer, error) {
+	// NOTE: I just copied some parts of NewNode related to starting the
+	// API, but it still cotains many parameters that are not available
+	meddler.Debug = cfg.Debug.MeddlerLogs
+	// Stablish DB connection
+	dbWrite, err := dbUtils.InitSQLDB(
+		cfg.PostgreSQL.PortWrite,
+		cfg.PostgreSQL.HostWrite,
+		cfg.PostgreSQL.UserWrite,
+		cfg.PostgreSQL.PasswordWrite,
+		cfg.PostgreSQL.NameWrite,
+	)
+	if err != nil {
+		return nil, tracerr.Wrap(fmt.Errorf("dbUtils.InitSQLDB: %w", err))
+	}
+	var dbRead *sqlx.DB
+	if cfg.PostgreSQL.HostRead == "" {
+		dbRead = dbWrite
+	} else if cfg.PostgreSQL.HostRead == cfg.PostgreSQL.HostWrite {
+		return nil, tracerr.Wrap(fmt.Errorf(
+			"PostgreSQL.HostRead and PostgreSQL.HostWrite must be different",
+		))
+	} else {
+		dbRead, err = dbUtils.InitSQLDB(
+			cfg.PostgreSQL.PortRead,
+			cfg.PostgreSQL.HostRead,
+			cfg.PostgreSQL.UserRead,
+			cfg.PostgreSQL.PasswordRead,
+			cfg.PostgreSQL.NameRead,
+		)
+		if err != nil {
+			return nil, tracerr.Wrap(fmt.Errorf("dbUtils.InitSQLDB: %w", err))
+		}
+	}
+	var apiConnCon *dbUtils.APIConnectionController
+	if cfg.API.Explorer || mode == ModeCoordinator {
+		apiConnCon = dbUtils.NewAPICnnectionController(
+			cfg.API.MaxSQLConnections,
+			cfg.API.SQLConnectionTimeout.Duration,
+		)
+	}
+
+	historyDB := historydb.NewHistoryDB(dbRead, dbWrite, apiConnCon)
+
+	var l2DB *l2db.L2DB
+	if mode == ModeCoordinator {
+		l2DB = l2db.NewL2DB(
+			dbRead, dbWrite,
+			cfg.Coordinator.L2DB.SafetyPeriod,
+			cfg.Coordinator.L2DB.MaxTxs,
+			cfg.Coordinator.L2DB.MinFeeUSD,
+			cfg.Coordinator.L2DB.TTL.Duration,
+			apiConnCon,
+		)
+	}
+
+	var nodeAPI *NodeAPI
+	if cfg.API.Address != "" {
+		if cfg.Debug.GinDebugMode {
+			gin.SetMode(gin.DebugMode)
+		} else {
+			gin.SetMode(gin.ReleaseMode)
+		}
+		if cfg.API.UpdateMetricsInterval.Duration == 0 {
+			return nil, tracerr.Wrap(fmt.Errorf("invalid cfg.API.UpdateMetricsInterval: %v",
+				cfg.API.UpdateMetricsInterval.Duration))
+		}
+		if cfg.API.UpdateRecommendedFeeInterval.Duration == 0 {
+			return nil, tracerr.Wrap(fmt.Errorf("invalid cfg.API.UpdateRecommendedFeeInterval: %v",
+				cfg.API.UpdateRecommendedFeeInterval.Duration))
+		}
+		server := gin.Default()
+		coord := false
+		if mode == ModeCoordinator {
+			coord = cfg.Coordinator.API.Coordinator
+		}
+		var err error
+		nodeAPI, err = NewNodeAPI(
+			cfg.API.Address,
+			coord, cfg.API.Explorer,
+			server,
+			historyDB,
+			stateDB,
+			l2DB,
+			&api.Config{
+				RollupConstants:   scConsts.Rollup,
+				AuctionConstants:  scConsts.Auction,
+				WDelayerConstants: scConsts.WDelayer,
+				ChainID:           chainIDU16,
+				HermezAddress:     cfg.SmartContracts.Rollup,
+			},
+			cfg.Coordinator.ForgeDelay.Duration,
+		)
+		if err != nil {
+			return nil, tracerr.Wrap(err)
+		}
+		nodeAPI.api.SetRollupVariables(*initSCVars.Rollup)
+		nodeAPI.api.SetAuctionVariables(*initSCVars.Auction)
+		nodeAPI.api.SetWDelayerVariables(*initSCVars.WDelayer)
+	}
+	// ETC...
+}
+
 // NodeAPI holds the node http API
 type NodeAPI struct { //nolint:golint
 	api    *api.API
