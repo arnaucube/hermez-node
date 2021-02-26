@@ -144,10 +144,15 @@ func cmdRun(c *cli.Context) error {
 }
 
 func cmdServeAPI(c *cli.Context) error {
-	cfg, err := parseCli(c)
+	cfgPath := c.String(flagCfg)
+	cfg, err := config.LoadAPIServer(cfgPath)
 	if err != nil {
+		if err := cli.ShowAppHelp(c); err != nil {
+			panic(err)
+		}
 		return tracerr.Wrap(fmt.Errorf("error parsing flags and config: %w", err))
 	}
+
 	node, err := node.NewNode(cfg.mode, cfg.node)
 	if err != nil {
 		return tracerr.Wrap(fmt.Errorf("error starting node: %w", err))
@@ -261,9 +266,6 @@ func getConfig(c *cli.Context) (*Config, error) {
 	var cfg Config
 	mode := c.String(flagMode)
 	nodeCfgPath := c.String(flagCfg)
-	if nodeCfgPath == "" {
-		return nil, tracerr.Wrap(fmt.Errorf("required flag \"%v\" not set", flagCfg))
-	}
 	var err error
 	switch mode {
 	case modeSync:

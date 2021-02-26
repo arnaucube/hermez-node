@@ -338,6 +338,17 @@ type APIServer struct {
 			Coordinator bool
 		} `validate:"required"`
 	} `validate:"required"`
+	L2DB struct {
+		// MaxTxs is the maximum number of pending L2Txs that can be
+		// stored in the pool.  Once this number of pending L2Txs is
+		// reached, inserts to the pool will be denied until some of
+		// the pending txs are forged.
+		MaxTxs uint32 `validate:"required"`
+		// MinFeeUSD is the minimum fee in USD that a tx must pay in
+		// order to be accepted into the pool.  Txs with lower than
+		// minimum fee will be rejected at the API level.
+		MinFeeUSD float64
+	} `validate:"required"`
 	Debug NodeDebug `validate:"required"`
 }
 
@@ -375,6 +386,19 @@ func LoadNode(path string) (*Node, error) {
 	var cfg Node
 	if err := Load(path, &cfg); err != nil {
 		return nil, tracerr.Wrap(fmt.Errorf("error loading node configuration file: %w", err))
+	}
+	validate := validator.New()
+	if err := validate.Struct(cfg); err != nil {
+		return nil, tracerr.Wrap(fmt.Errorf("error validating configuration file: %w", err))
+	}
+	return &cfg, nil
+}
+
+// LoadAPIServer loads the APIServer configuration from path.
+func LoadAPIServer(path string) (*APIServer, error) {
+	var cfg APIServer
+	if err := Load(path, &cfg); err != nil {
+		return nil, tracerr.Wrap(fmt.Errorf("error loading apiServer configuration file: %w", err))
 	}
 	validate := validator.New()
 	if err := validate.Struct(cfg); err != nil {
