@@ -143,6 +143,42 @@ func cmdRun(c *cli.Context) error {
 	return nil
 }
 
+func cmdServeAPI(c *cli.Context) error {
+	cfg, err := parseCli(c)
+	if err != nil {
+		return tracerr.Wrap(fmt.Errorf("error parsing flags and config: %w", err))
+	}
+	node, err := node.NewNode(cfg.mode, cfg.node)
+	if err != nil {
+		return tracerr.Wrap(fmt.Errorf("error starting node: %w", err))
+	}
+	node.Start()
+
+	stopCh := make(chan interface{})
+
+	// catch ^C to send the stop signal
+	ossig := make(chan os.Signal, 1)
+	signal.Notify(ossig, os.Interrupt)
+	const forceStopCount = 3
+	go func() {
+		n := 0
+		for sig := range ossig {
+			if sig == os.Interrupt {
+				log.Info("Received Interrupt Signal")
+				stopCh <- nil
+				n++
+				if n == forceStopCount {
+					log.Fatalf("Received %v Interrupt Signals", forceStopCount)
+				}
+			}
+		}
+	}()
+	<-stopCh
+	node.Stop()
+
+	return nil
+}
+
 func cmdDiscard(c *cli.Context) error {
 	_cfg, err := parseCli(c)
 	if err != nil {
@@ -303,6 +339,12 @@ func main() {
 			Aliases: []string{},
 			Usage:   "Run the hermez-node in the indicated mode",
 			Action:  cmdRun,
+		},
+		{
+			Name:    "serveapi",
+			Aliases: []string{},
+			Usage:   "Serve the API only",
+			Action:  cmdServeAPI,
 		},
 		{
 			Name:    "discard",
