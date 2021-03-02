@@ -500,10 +500,10 @@ func NewAPIServer(mode Mode, cfg *config.APIServer) (*APIServer, error) {
 	if mode == ModeCoordinator {
 		l2DB = l2db.NewL2DB(
 			dbRead, dbWrite,
-			cfg.L2DB.SafetyPeriod,
-			cfg.L2DB.MaxTxs,
-			cfg.L2DB.MinFeeUSD,
-			cfg.L2DB,
+			cfg.Coordinator.L2DB.SafetyPeriod,
+			cfg.Coordinator.L2DB.MaxTxs,
+			cfg.Coordinator.L2DB.MinFeeUSD,
+			cfg.Coordinator.L2DB.TTL.Duration,
 			apiConnCon,
 		)
 	}
