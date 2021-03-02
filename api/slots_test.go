@@ -99,12 +99,14 @@ func TestGetSlot(t *testing.T) {
 			nil, &fetchedSlot,
 		),
 	)
-	emptySlot := api.getEmptyTestSlot(slotNum, api.status.Network.LastSyncBlock, tc.auctionVars)
+	ni, err := api.h.GetNodeInfoAPI()
+	assert.NoError(t, err)
+	emptySlot := api.getEmptyTestSlot(slotNum, ni.StateAPI.Network.LastSyncBlock, tc.auctionVars)
 	assertSlot(t, emptySlot, fetchedSlot)
 
 	// Invalid slotNum
 	path := endpoint + strconv.Itoa(-2)
-	err := doBadReq("GET", path, nil, 400)
+	err = doBadReq("GET", path, nil, 400)
 	assert.NoError(t, err)
 }
 
@@ -127,8 +129,10 @@ func TestGetSlots(t *testing.T) {
 	err := doGoodReqPaginated(path, historydb.OrderAsc, &testSlotsResponse{}, appendIter)
 	assert.NoError(t, err)
 	allSlots := tc.slots
+	ni, err := api.h.GetNodeInfoAPI()
+	assert.NoError(t, err)
 	for i := tc.slots[len(tc.slots)-1].SlotNum; i < maxSlotNum; i++ {
-		emptySlot := api.getEmptyTestSlot(i+1, api.status.Network.LastSyncBlock, tc.auctionVars)
+		emptySlot := api.getEmptyTestSlot(i+1, ni.StateAPI.Network.LastSyncBlock, tc.auctionVars)
 		allSlots = append(allSlots, emptySlot)
 	}
 	assertSlots(t, allSlots, fetchedSlots)

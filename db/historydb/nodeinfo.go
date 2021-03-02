@@ -71,7 +71,7 @@ type NodeInfo struct {
 func (hdb *HistoryDB) GetNodeInfo() (*NodeInfo, error) {
 	ni := &NodeInfo{}
 	err := meddler.QueryRow(
-		hdb.dbRead, ni, `SELECT * FROM node_info WHERE;`,
+		hdb.dbRead, ni, `SELECT * FROM node_info ORDER BY item_id DESC LIMIT 1;`,
 	)
 	return ni, tracerr.Wrap(err)
 }
@@ -354,7 +354,7 @@ func (hdb *HistoryDB) UpdateMetrics() error {
 			txn, p, `SELECT
 			COALESCE (MIN(batch.batch_num), 0) as from_batch_num,
 			COALESCE (MIN(block.timestamp), NOW()) AS from_timestamp, 
-			COALESCE (MAX(block.timestamp), NOW()) AS to_timestamp,
+			COALESCE (MAX(block.timestamp), NOW()) AS to_timestamp
 			FROM batch INNER JOIN block ON batch.eth_block_num = block.eth_block_num
 			WHERE block.timestamp >= NOW() - INTERVAL '24 HOURS';`,
 		); err != nil {

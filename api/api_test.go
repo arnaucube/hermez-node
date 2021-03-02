@@ -180,7 +180,7 @@ type testCommon struct {
 	auctionVars      common.AuctionVariables
 	rollupVars       common.RollupVariables
 	wdelayerVars     common.WDelayerVariables
-	nextForgers      []NextForger
+	nextForgers      []historydb.NextForger
 }
 
 var tc testCommon
@@ -206,16 +206,6 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	// StateDB
-	dir, err := ioutil.TempDir("", "tmpdb")
-	if err != nil {
-		panic(err)
-	}
-	defer func() {
-		if err := os.RemoveAll(dir); err != nil {
-			panic(err)
-		}
-	}()
 	// L2DB
 	l2DB := l2db.NewL2DB(database, database, 10, 1000, 0.0, 24*time.Hour, apiConnCon)
 	test.WipeDB(l2DB.DB()) // this will clean HistoryDB and L2DB
@@ -230,18 +220,26 @@ func TestMain(m *testing.M) {
 
 	// API
 	apiGin := gin.Default()
+	// Reset DB
+	test.WipeDB(hdb.DB())
+	if err := hdb.SetInitialNodeInfo(10, 0.0, &historydb.Constants{
+		RollupConstants:   _config.RollupConstants,
+		AuctionConstants:  _config.AuctionConstants,
+		WDelayerConstants: _config.WDelayerConstants,
+		ChainID:           chainID,
+		HermezAddress:     _config.HermezAddress,
+	}); err != nil {
+		panic(err)
+	}
 	api, err = NewAPI(
 		true,
 		true,
 		apiGin,
 		hdb,
 		l2DB,
-		&_config,
-		&NodeConfig{
-			ForgeDelay: 180,
-		},
 	)
 	if err != nil {
+		log.Error(err)
 		panic(err)
 	}
 	// Start server
@@ -256,9 +254,6 @@ func TestMain(m *testing.M) {
 			panic(err)
 		}
 	}()
-
-	// Reset DB
-	test.WipeDB(api.h.DB())
 
 	// Genratre blockchain data with til
 	tcc := til.NewContext(chainID, common.RollupConstMaxL1UserTx)
@@ -460,19 +455,19 @@ func TestMain(m *testing.M) {
 	if err = api.h.AddBids(bids); err != nil {
 		panic(err)
 	}
-	bootForger := NextForger{
+	bootForger := historydb.NextForger{
 		Coordinator: historydb.CoordinatorAPI{
 			Forger: auctionVars.BootCoordinator,
 			URL:    auctionVars.BootCoordinatorURL,
 		},
 	}
 	// Set next forgers: set all as boot coordinator then replace the non boot coordinators
-	nextForgers := []NextForger{}
+	nextForgers := []historydb.NextForger{}
 	var initBlock int64 = 140
 	var deltaBlocks int64 = 40
 	for i := 1; i < int(auctionVars.ClosedAuctionSlots)+2; i++ {
 		fromBlock := initBlock + deltaBlocks*int64(i-1)
-		bootForger.Period = Period{
+		bootForger.Period = historydb.Period{
 			SlotNum:   int64(i),
 			FromBlock: fromBlock,
 			ToBlock:   fromBlock + deltaBlocks - 1,
@@ -589,15 +584,12 @@ func TestMain(m *testing.M) {
 	if err := database.Close(); err != nil {
 		panic(err)
 	}
-	if err := os.RemoveAll(dir); err != nil {
-		panic(err)
-	}
 	os.Exit(result)
 }
 
 func TestTimeout(t *testing.T) {
 	pass := os.Getenv("POSTGRES_PASS")
-	databaseTO, err := db.InitSQLDB(5432, "localhost", "hermez", pass, "hermez")
+	databaseTO, err := db.ConnectSQLDB(5432, "localhost", "hermez", pass, "hermez")
 	require.NoError(t, err)
 	apiConnConTO := db.NewAPICnnectionController(1, 100*time.Millisecond)
 	hdbTO := historydb.NewHistoryDB(databaseTO, databaseTO, apiConnConTO)
@@ -627,17 +619,12 @@ func TestTimeout(t *testing.T) {
 			require.NoError(t, err)
 		}
 	}()
-	_config := getConfigTest(0)
 	_, err = NewAPI(
 		true,
 		true,
 		apiGinTO,
 		hdbTO,
 		l2DBTO,
-		&_config,
-		&NodeConfig{
-			ForgeDelay: 180,
-		},
 	)
 	require.NoError(t, err)
 

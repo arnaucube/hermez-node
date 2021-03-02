@@ -7,7 +7,7 @@ import (
 )
 
 func (a *API) getState(c *gin.Context) {
-	ni, err := a.h.GetNodeInfo()
+	ni, err := a.h.GetNodeInfoAPI()
 	if err != nil {
 		retBadReq(err, c)
 		return

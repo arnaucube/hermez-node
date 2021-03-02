@@ -21,18 +21,18 @@ type testStatus struct {
 }
 
 type testNetwork struct {
-	LastEthBlock  int64        `json:"lastEthereumBlock"`
-	LastSyncBlock int64        `json:"lastSynchedBlock"`
-	LastBatch     testBatch    `json:"lastBatch"`
-	CurrentSlot   int64        `json:"currentSlot"`
-	NextForgers   []NextForger `json:"nextForgers"`
+	LastEthBlock  int64                  `json:"lastEthereumBlock"`
+	LastSyncBlock int64                  `json:"lastSynchedBlock"`
+	LastBatch     testBatch              `json:"lastBatch"`
+	CurrentSlot   int64                  `json:"currentSlot"`
+	NextForgers   []historydb.NextForger `json:"nextForgers"`
 }
 
 func TestSetRollupVariables(t *testing.T) {
-	rollupVars := &common.RollupVariables{}
-	assertEqualRollupVariables(t, *rollupVars, api.status.Rollup, true)
-	api.SetRollupVariables(tc.rollupVars)
-	assertEqualRollupVariables(t, tc.rollupVars, api.status.Rollup, true)
+	api.h.SetRollupVariables(tc.rollupVars)
+	ni, err := api.h.GetNodeInfoAPI()
+	assert.NoError(t, err)
+	assertEqualRollupVariables(t, tc.rollupVars, ni.StateAPI.Rollup, true)
 }
 
 func assertEqualRollupVariables(t *testing.T, rollupVariables common.RollupVariables, apiVariables historydb.RollupVariablesAPI, checkBuckets bool) {
@@ -51,17 +51,17 @@ func assertEqualRollupVariables(t *testing.T, rollupVariables common.RollupVaria
 }
 
 func TestSetWDelayerVariables(t *testing.T) {
-	wdelayerVars := &common.WDelayerVariables{}
-	assert.Equal(t, *wdelayerVars, api.status.WithdrawalDelayer)
-	api.SetWDelayerVariables(tc.wdelayerVars)
-	assert.Equal(t, tc.wdelayerVars, api.status.WithdrawalDelayer)
+	api.h.SetWDelayerVariables(tc.wdelayerVars)
+	ni, err := api.h.GetNodeInfoAPI()
+	assert.NoError(t, err)
+	assert.Equal(t, tc.wdelayerVars, ni.StateAPI.WithdrawalDelayer)
 }
 
 func TestSetAuctionVariables(t *testing.T) {
-	auctionVars := &common.AuctionVariables{}
-	assertEqualAuctionVariables(t, *auctionVars, api.status.Auction)
-	api.SetAuctionVariables(tc.auctionVars)
-	assertEqualAuctionVariables(t, tc.auctionVars, api.status.Auction)
+	api.h.SetAuctionVariables(tc.auctionVars)
+	ni, err := api.h.GetNodeInfoAPI()
+	assert.NoError(t, err)
+	assertEqualAuctionVariables(t, tc.auctionVars, ni.StateAPI.Auction)
 }
 
 func assertEqualAuctionVariables(t *testing.T, auctionVariables common.AuctionVariables, apiVariables historydb.AuctionVariablesAPI) {
@@ -85,11 +85,6 @@ func assertEqualAuctionVariables(t *testing.T, auctionVariables common.AuctionVa
 }
 
 func TestUpdateNetworkInfo(t *testing.T) {
-	status := &Network{}
-	assert.Equal(t, status.LastSyncBlock, api.status.Network.LastSyncBlock)
-	assert.Equal(t, status.LastBatch, api.status.Network.LastBatch)
-	assert.Equal(t, status.CurrentSlot, api.status.Network.CurrentSlot)
-	assert.Equal(t, status.NextForgers, api.status.Network.NextForgers)
 	lastBlock := tc.blocks[3]
 	lastBatchNum := common.BatchNum(3)
 	currentSlotNum := int64(1)
@@ -118,14 +113,16 @@ func TestUpdateNetworkInfo(t *testing.T) {
 	err := api.h.AddBucketUpdatesTest(api.h.DB(), bucketUpdates)
 	require.NoError(t, err)
 
-	err = api.UpdateNetworkInfo(lastBlock, lastBlock, lastBatchNum, currentSlotNum)
+	err = api.h.UpdateNetworkInfo(lastBlock, lastBlock, lastBatchNum, currentSlotNum)
 	assert.NoError(t, err)
-	assert.Equal(t, lastBlock.Num, api.status.Network.LastSyncBlock)
-	assert.Equal(t, lastBatchNum, api.status.Network.LastBatch.BatchNum)
-	assert.Equal(t, currentSlotNum, api.status.Network.CurrentSlot)
-	assert.Equal(t, int(api.status.Auction.ClosedAuctionSlots)+1, len(api.status.Network.NextForgers))
-	assert.Equal(t, api.status.Rollup.Buckets[0].Withdrawals, apitypes.NewBigIntStr(big.NewInt(123)))
-	assert.Equal(t, api.status.Rollup.Buckets[2].Withdrawals, apitypes.NewBigIntStr(big.NewInt(43)))
+	ni, err := api.h.GetNodeInfoAPI()
+	assert.NoError(t, err)
+	assert.Equal(t, lastBlock.Num, ni.StateAPI.Network.LastSyncBlock)
+	assert.Equal(t, lastBatchNum, ni.StateAPI.Network.LastBatch.BatchNum)
+	assert.Equal(t, currentSlotNum, ni.StateAPI.Network.CurrentSlot)
+	assert.Equal(t, int(ni.StateAPI.Auction.ClosedAuctionSlots)+1, len(ni.StateAPI.Network.NextForgers))
+	assert.Equal(t, ni.StateAPI.Rollup.Buckets[0].Withdrawals, apitypes.NewBigIntStr(big.NewInt(123)))
+	assert.Equal(t, ni.StateAPI.Rollup.Buckets[2].Withdrawals, apitypes.NewBigIntStr(big.NewInt(43)))
 }
 
 func TestUpdateMetrics(t *testing.T) {
@@ -133,45 +130,49 @@ func TestUpdateMetrics(t *testing.T) {
 	lastBlock := tc.blocks[3]
 	lastBatchNum := common.BatchNum(12)
 	currentSlotNum := int64(1)
-	err := api.UpdateNetworkInfo(lastBlock, lastBlock, lastBatchNum, currentSlotNum)
+	err := api.h.UpdateNetworkInfo(lastBlock, lastBlock, lastBatchNum, currentSlotNum)
 	assert.NoError(t, err)
 
-	err = api.UpdateMetrics()
+	err = api.h.UpdateMetrics()
 	assert.NoError(t, err)
-	assert.Greater(t, api.status.Metrics.TransactionsPerBatch, float64(0))
-	assert.Greater(t, api.status.Metrics.BatchFrequency, float64(0))
-	assert.Greater(t, api.status.Metrics.TransactionsPerSecond, float64(0))
-	assert.Greater(t, api.status.Metrics.TotalAccounts, int64(0))
-	assert.Greater(t, api.status.Metrics.TotalBJJs, int64(0))
-	assert.Greater(t, api.status.Metrics.AvgTransactionFee, float64(0))
+	ni, err := api.h.GetNodeInfoAPI()
+	assert.NoError(t, err)
+	assert.Greater(t, ni.StateAPI.Metrics.TransactionsPerBatch, float64(0))
+	assert.Greater(t, ni.StateAPI.Metrics.BatchFrequency, float64(0))
+	assert.Greater(t, ni.StateAPI.Metrics.TransactionsPerSecond, float64(0))
+	assert.Greater(t, ni.StateAPI.Metrics.TotalAccounts, int64(0))
+	assert.Greater(t, ni.StateAPI.Metrics.TotalBJJs, int64(0))
+	assert.Greater(t, ni.StateAPI.Metrics.AvgTransactionFee, float64(0))
 }
 
 func TestUpdateRecommendedFee(t *testing.T) {
-	err := api.UpdateRecommendedFee()
+	err := api.h.UpdateRecommendedFee()
 	assert.NoError(t, err)
 	var minFeeUSD float64
 	if api.l2 != nil {
 		minFeeUSD = api.l2.MinFeeUSD()
 	}
-	assert.Greater(t, api.status.RecommendedFee.ExistingAccount, minFeeUSD)
-	assert.Equal(t, api.status.RecommendedFee.CreatesAccount,
-		api.status.RecommendedFee.ExistingAccount*createAccountExtraFeePercentage)
-	assert.Equal(t, api.status.RecommendedFee.CreatesAccountAndRegister,
-		api.status.RecommendedFee.ExistingAccount*createAccountInternalExtraFeePercentage)
+	ni, err := api.h.GetNodeInfoAPI()
+	assert.NoError(t, err)
+	assert.Greater(t, ni.StateAPI.RecommendedFee.ExistingAccount, minFeeUSD)
+	// assert.Equal(t, ni.StateAPI.RecommendedFee.CreatesAccount,
+	// 	ni.StateAPI.RecommendedFee.ExistingAccount*createAccountExtraFeePercentage)
+	// assert.Equal(t, ni.StateAPI.RecommendedFee.CreatesAccountAndRegister,
+	// 	ni.StateAPI.RecommendedFee.ExistingAccount*createAccountInternalExtraFeePercentage)
 }
 
 func TestGetState(t *testing.T) {
 	lastBlock := tc.blocks[3]
 	lastBatchNum := common.BatchNum(12)
 	currentSlotNum := int64(1)
-	api.SetRollupVariables(tc.rollupVars)
-	api.SetWDelayerVariables(tc.wdelayerVars)
-	api.SetAuctionVariables(tc.auctionVars)
-	err := api.UpdateNetworkInfo(lastBlock, lastBlock, lastBatchNum, currentSlotNum)
+	api.h.SetRollupVariables(tc.rollupVars)
+	api.h.SetWDelayerVariables(tc.wdelayerVars)
+	api.h.SetAuctionVariables(tc.auctionVars)
+	err := api.h.UpdateNetworkInfo(lastBlock, lastBlock, lastBatchNum, currentSlotNum)
 	assert.NoError(t, err)
-	err = api.UpdateMetrics()
+	err = api.h.UpdateMetrics()
 	assert.NoError(t, err)
-	err = api.UpdateRecommendedFee()
+	err = api.h.UpdateRecommendedFee()
 	assert.NoError(t, err)
 
 	endpoint := apiURL + "state"
@@ -204,13 +205,13 @@ func TestGetState(t *testing.T) {
 	// Recommended fee
 	// TODO: perform real asserts (not just greater than 0)
 	assert.Greater(t, status.RecommendedFee.ExistingAccount, float64(0))
-	assert.Equal(t, status.RecommendedFee.CreatesAccount,
-		status.RecommendedFee.ExistingAccount*createAccountExtraFeePercentage)
-	assert.Equal(t, status.RecommendedFee.CreatesAccountAndRegister,
-		status.RecommendedFee.ExistingAccount*createAccountInternalExtraFeePercentage)
+	// assert.Equal(t, status.RecommendedFee.CreatesAccount,
+	// 	status.RecommendedFee.ExistingAccount*createAccountExtraFeePercentage)
+	// assert.Equal(t, status.RecommendedFee.CreatesAccountAndRegister,
+	// 	status.RecommendedFee.ExistingAccount*createAccountInternalExtraFeePercentage)
 }
 
-func assertNextForgers(t *testing.T, expected, actual []NextForger) {
+func assertNextForgers(t *testing.T, expected, actual []historydb.NextForger) {
 	assert.Equal(t, len(expected), len(actual))
 	for i := range expected {
 		// ignore timestamps and other metadata

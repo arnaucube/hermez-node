@@ -662,11 +662,12 @@ CREATE TABLE account_creation_auth (
 );
 
 CREATE TABLE node_info (
+    item_id SERIAL PRIMARY KEY,
     state BYTEA,            -- object returned by GET /state
-    pool_max_txs BIGINT,    -- L2DB config
+    max_pool_txs BIGINT,    -- L2DB config
     min_fee NUMERIC,        -- L2DB config
-    constants BYTEA -- info of the network that is constant
-)
+    constants BYTEA         -- info of the network that is constant
+);
 
 -- +migrate Down
 -- triggers
