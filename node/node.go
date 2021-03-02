@@ -67,6 +67,7 @@ type Node struct {
 	mode         Mode
 	sqlConnRead  *sqlx.DB
 	sqlConnWrite *sqlx.DB
+	historyDB    *historydb.HistoryDB
 	ctx          context.Context
 	wg           sync.WaitGroup
 	cancel       context.CancelFunc
@@ -235,6 +236,20 @@ func NewNode(mode Mode, cfg *config.Node) (*Node, error) {
 		WDelayer: *sync.WDelayerConstants(),
 	}
 
+	if err := historyDB.SetInitialNodeInfo(
+		cfg.Coordinator.L2DB.MaxTxs,
+		cfg.Coordinator.L2DB.MinFeeUSD,
+		&historydb.Constants{
+			RollupConstants:   scConsts.Rollup,
+			AuctionConstants:  scConsts.Auction,
+			WDelayerConstants: scConsts.WDelayer,
+			ChainID:           chainIDU16,
+			HermezAddress:     cfg.SmartContracts.Rollup,
+		},
+	); err != nil {
+		return nil, tracerr.Wrap(err)
+	}
+
 	var coord *coordinator.Coordinator
 	var l2DB *l2db.L2DB
 	if mode == ModeCoordinator {
@@ -400,23 +415,11 @@ func NewNode(mode Mode, cfg *config.Node) (*Node, error) {
 			coord, cfg.API.Explorer,
 			server,
 			historyDB,
-			stateDB,
 			l2DB,
-			&api.Config{
-				RollupConstants:   scConsts.Rollup,
-				AuctionConstants:  scConsts.Auction,
-				WDelayerConstants: scConsts.WDelayer,
-				ChainID:           chainIDU16,
-				HermezAddress:     cfg.SmartContracts.Rollup,
-			},
-			cfg.Coordinator.ForgeDelay.Duration,
 		)
 		if err != nil {
 			return nil, tracerr.Wrap(err)
 		}
-		nodeAPI.api.SetRollupVariables(*initSCVars.Rollup)
-		nodeAPI.api.SetAuctionVariables(*initSCVars.Auction)
-		nodeAPI.api.SetWDelayerVariables(*initSCVars.WDelayer)
 	}
 	var debugAPI *debugapi.DebugAPI
 	if cfg.Debug.APIAddress != "" {
@@ -438,6 +441,7 @@ func NewNode(mode Mode, cfg *config.Node) (*Node, error) {
 		mode:         mode,
 		sqlConnRead:  dbRead,
 		sqlConnWrite: dbWrite,
+		historyDB:    historyDB,
 		ctx:          ctx,
 		cancel:       cancel,
 	}, nil
@@ -496,10 +500,10 @@ func NewAPIServer(mode Mode, cfg *config.APIServer) (*APIServer, error) {
 	if mode == ModeCoordinator {
 		l2DB = l2db.NewL2DB(
 			dbRead, dbWrite,
-			cfg.Coordinator.L2DB.SafetyPeriod,
-			cfg.Coordinator.L2DB.MaxTxs,
-			cfg.Coordinator.L2DB.MinFeeUSD,
-			cfg.Coordinator.L2DB.TTL.Duration,
+			cfg.L2DB.SafetyPeriod,
+			cfg.L2DB.MaxTxs,
+			cfg.L2DB.MinFeeUSD,
+			cfg.L2DB,
 			apiConnCon,
 		)
 	}
@@ -530,23 +534,11 @@ func NewAPIServer(mode Mode, cfg *config.APIServer) (*APIServer, error) {
 			coord, cfg.API.Explorer,
 			server,
 			historyDB,
-			stateDB,
 			l2DB,
-			&api.Config{
-				RollupConstants:   scConsts.Rollup,
-				AuctionConstants:  scConsts.Auction,
-				WDelayerConstants: scConsts.WDelayer,
-				ChainID:           chainIDU16,
-				HermezAddress:     cfg.SmartContracts.Rollup,
-			},
-			cfg.Coordinator.ForgeDelay.Duration,
 		)
 		if err != nil {
 			return nil, tracerr.Wrap(err)
 		}
-		nodeAPI.api.SetRollupVariables(*initSCVars.Rollup)
-		nodeAPI.api.SetAuctionVariables(*initSCVars.Auction)
-		nodeAPI.api.SetWDelayerVariables(*initSCVars.WDelayer)
 	}
 	// ETC...
 }
@@ -570,10 +562,7 @@ func NewNodeAPI(
 	coordinatorEndpoints, explorerEndpoints bool,
 	server *gin.Engine,
 	hdb *historydb.HistoryDB,
-	sdb *statedb.StateDB,
 	l2db *l2db.L2DB,
-	config *api.Config,
-	forgeDelay time.Duration,
 ) (*NodeAPI, error) {
 	engine := gin.Default()
 	engine.NoRoute(handleNoRoute)
@@ -583,10 +572,6 @@ func NewNodeAPI(
 		engine,
 		hdb,
 		l2db,
-		config,
-		&api.NodeConfig{
-			ForgeDelay: forgeDelay.Seconds(),
-		},
 	)
 	if err != nil {
 		return nil, tracerr.Wrap(err)
@@ -642,17 +627,17 @@ func (n *Node) handleNewBlock(ctx context.Context, stats *synchronizer.Stats, va
 	}
 	if n.nodeAPI != nil {
 		if vars.Rollup != nil {
-			n.nodeAPI.api.SetRollupVariables(*vars.Rollup)
+			n.historyDB.SetRollupVariables(*vars.Rollup)
 		}
 		if vars.Auction != nil {
-			n.nodeAPI.api.SetAuctionVariables(*vars.Auction)
+			n.historyDB.SetAuctionVariables(*vars.Auction)
 		}
 		if vars.WDelayer != nil {
-			n.nodeAPI.api.SetWDelayerVariables(*vars.WDelayer)
+			n.historyDB.SetWDelayerVariables(*vars.WDelayer)
 		}
 
 		if stats.Synced() {
-			if err := n.nodeAPI.api.UpdateNetworkInfo(
+			if err := n.historyDB.UpdateNetworkInfo(
 				stats.Eth.LastBlock, stats.Sync.LastBlock,
 				common.BatchNum(stats.Eth.LastBatchNum),
 				stats.Sync.Auction.CurrentSlot.SlotNum,
@@ -660,7 +645,7 @@ func (n *Node) handleNewBlock(ctx context.Context, stats *synchronizer.Stats, va
 				log.Errorw("API.UpdateNetworkInfo", "err", err)
 			}
 		} else {
-			n.nodeAPI.api.UpdateNetworkInfoBlock(
+			n.historyDB.UpdateNetworkInfoBlock(
 				stats.Eth.LastBlock, stats.Sync.LastBlock,
 			)
 		}
@@ -674,15 +659,13 @@ func (n *Node) handleReorg(ctx context.Context, stats *synchronizer.Stats, vars 
 			Vars:  vars,
 		})
 	}
-	if n.nodeAPI != nil {
-		vars := n.sync.SCVars()
-		n.nodeAPI.api.SetRollupVariables(*vars.Rollup)
-		n.nodeAPI.api.SetAuctionVariables(*vars.Auction)
-		n.nodeAPI.api.SetWDelayerVariables(*vars.WDelayer)
-		n.nodeAPI.api.UpdateNetworkInfoBlock(
-			stats.Eth.LastBlock, stats.Sync.LastBlock,
-		)
-	}
+	vars = n.sync.SCVars()
+	n.historyDB.SetRollupVariables(*vars.Rollup)
+	n.historyDB.SetAuctionVariables(*vars.Auction)
+	n.historyDB.SetWDelayerVariables(*vars.WDelayer)
+	n.historyDB.UpdateNetworkInfoBlock(
+		stats.Eth.LastBlock, stats.Sync.LastBlock,
+	)
 }
 
 // TODO(Edu): Consider keeping the `lastBlock` inside synchronizer so that we
@@ -812,7 +795,7 @@ func (n *Node) StartNodeAPI() {
 	n.wg.Add(1)
 	go func() {
 		// Do an initial update on startup
-		if err := n.nodeAPI.api.UpdateMetrics(); err != nil {
+		if err := n.historyDB.UpdateMetrics(); err != nil {
 			log.Errorw("API.UpdateMetrics", "err", err)
 		}
 		for {
@@ -822,7 +805,7 @@ func (n *Node) StartNodeAPI() {
 				n.wg.Done()
 				return
 			case <-time.After(n.cfg.API.UpdateMetricsInterval.Duration):
-				if err := n.nodeAPI.api.UpdateMetrics(); err != nil {
+				if err := n.historyDB.UpdateMetrics(); err != nil {
 					log.Errorw("API.UpdateMetrics", "err", err)
 				}
 			}
@@ -832,7 +815,7 @@ func (n *Node) StartNodeAPI() {
 	n.wg.Add(1)
 	go func() {
 		// Do an initial update on startup
-		if err := n.nodeAPI.api.UpdateRecommendedFee(); err != nil {
+		if err := n.historyDB.UpdateRecommendedFee(); err != nil {
 			log.Errorw("API.UpdateRecommendedFee", "err", err)
 		}
 		for {
@@ -842,7 +825,7 @@ func (n *Node) StartNodeAPI() {
 				n.wg.Done()
 				return
 			case <-time.After(n.cfg.API.UpdateRecommendedFeeInterval.Duration):
-				if err := n.nodeAPI.api.UpdateRecommendedFee(); err != nil {
+				if err := n.historyDB.UpdateRecommendedFee(); err != nil {
 					log.Errorw("API.UpdateRecommendedFee", "err", err)
 				}
 			}

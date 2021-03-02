@@ -313,17 +313,6 @@ type Metrics struct {
 	EstimatedTimeToForgeL1 float64 `json:"estimatedTimeToForgeL1" meddler:"estimatedTimeToForgeL1"`
 }
 
-// MetricsTotals is used to get temporal information from HistoryDB
-// to calculate data to be stored into the Metrics struct
-type MetricsTotals struct {
-	TotalTransactions uint64          `meddler:"total_txs"`
-	FirstBatchNum     common.BatchNum `meddler:"batch_num"`
-	TotalBatches      int64           `meddler:"total_batches"`
-	TotalFeesUSD      float64         `meddler:"total_fees"`
-	MinTimestamp      time.Time       `meddler:"min_timestamp,utctime"`
-	MaxTimestamp      time.Time       `meddler:"max_timestamp,utctime"`
-}
-
 // BidAPI is a representation of a bid with additional information
 // required by the API
 type BidAPI struct {

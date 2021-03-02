@@ -1139,17 +1139,6 @@ func (hdb *HistoryDB) AddBlockSCData(blockData *common.BlockData) (err error) {
 	return tracerr.Wrap(txn.Commit())
 }
 
-// GetCoordinatorAPI returns a coordinator by its bidderAddr
-func (hdb *HistoryDB) GetCoordinatorAPI(bidderAddr ethCommon.Address) (*CoordinatorAPI, error) {
-	coordinator := &CoordinatorAPI{}
-	err := meddler.QueryRow(
-		hdb.dbRead, coordinator,
-		"SELECT * FROM coordinator WHERE bidder_addr = $1 ORDER BY item_id DESC LIMIT 1;",
-		bidderAddr,
-	)
-	return coordinator, tracerr.Wrap(err)
-}
-
 // AddAuctionVars insert auction vars into the DB
 func (hdb *HistoryDB) AddAuctionVars(auctionVars *common.AuctionVariables) error {
 	return tracerr.Wrap(meddler.Insert(hdb.dbWrite, "auction_vars", auctionVars))

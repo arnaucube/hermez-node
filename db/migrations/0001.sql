@@ -661,6 +661,13 @@ CREATE TABLE account_creation_auth (
     timestamp TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT timezone('utc', now())
 );
 
+CREATE TABLE node_info (
+    state BYTEA,            -- object returned by GET /state
+    pool_max_txs BIGINT,    -- L2DB config
+    min_fee NUMERIC,        -- L2DB config
+    constants BYTEA -- info of the network that is constant
+)
+
 -- +migrate Down
 -- triggers
 DROP TRIGGER IF EXISTS trigger_token_usd_update ON token;
@@ -675,6 +682,7 @@ DROP FUNCTION IF EXISTS set_tx;
 DROP FUNCTION IF EXISTS forge_l1_user_txs;
 DROP FUNCTION IF EXISTS set_pool_tx;
 -- drop tables IF EXISTS
+DROP TABLE IF EXISTS node_info;
 DROP TABLE IF EXISTS account_creation_auth;
 DROP TABLE IF EXISTS tx_pool;
 DROP TABLE IF EXISTS auction_vars;
