@@ -668,6 +668,7 @@ CREATE TABLE node_info (
     min_fee NUMERIC,        -- L2DB config
     constants BYTEA         -- info of the network that is constant
 );
+INSERT INTO node_info(item_id) VALUES (1); -- Always have a single row that we will update
 
 -- +migrate Down
 -- triggers

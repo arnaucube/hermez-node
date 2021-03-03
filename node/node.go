@@ -627,13 +627,13 @@ func (n *Node) handleNewBlock(ctx context.Context, stats *synchronizer.Stats, va
 	}
 	if n.nodeAPI != nil {
 		if vars.Rollup != nil {
-			n.historyDB.SetRollupVariables(*vars.Rollup)
+			n.historyDB.SetRollupVariables(vars.Rollup)
 		}
 		if vars.Auction != nil {
-			n.historyDB.SetAuctionVariables(*vars.Auction)
+			n.historyDB.SetAuctionVariables(vars.Auction)
 		}
 		if vars.WDelayer != nil {
-			n.historyDB.SetWDelayerVariables(*vars.WDelayer)
+			n.historyDB.SetWDelayerVariables(vars.WDelayer)
 		}
 
 		if stats.Synced() {
@@ -660,9 +660,9 @@ func (n *Node) handleReorg(ctx context.Context, stats *synchronizer.Stats, vars 
 		})
 	}
 	vars = n.sync.SCVars()
-	n.historyDB.SetRollupVariables(*vars.Rollup)
-	n.historyDB.SetAuctionVariables(*vars.Auction)
-	n.historyDB.SetWDelayerVariables(*vars.WDelayer)
+	n.historyDB.SetRollupVariables(vars.Rollup)
+	n.historyDB.SetAuctionVariables(vars.Auction)
+	n.historyDB.SetWDelayerVariables(vars.WDelayer)
 	n.historyDB.UpdateNetworkInfoBlock(
 		stats.Eth.LastBlock, stats.Sync.LastBlock,
 	)

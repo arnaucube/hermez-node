@@ -1114,166 +1114,166 @@ func TestAddEscapeHatchWithdrawals(t *testing.T) {
 	assert.Equal(t, escapeHatchWithdrawals, dbEscapeHatchWithdrawals)
 }
 
-func TestGetMetricsAPI(t *testing.T) {
-	test.WipeDB(historyDB.DB())
-	set := `
-		Type: Blockchain
-
-		AddToken(1)
-
-		CreateAccountDeposit(1) A: 1000 // numTx=1
-		CreateAccountDeposit(1) B: 2000 // numTx=2
-		CreateAccountDeposit(1) C: 3000 //numTx=3
-
-		// block 0 is stored as default in the DB
-		// block 1 does not exist
-		> batchL1 // numBatches=1
-		> batchL1 // numBatches=2
-		> block // blockNum=2
-
-		Transfer(1) C-A : 10 (1) // numTx=4
-		> batch // numBatches=3
-		> block // blockNum=3
-		Transfer(1) B-C : 10 (1) // numTx=5
-		> batch // numBatches=5
-		> block // blockNum=4
-		Transfer(1) A-B : 10 (1) // numTx=6
-		> batch // numBatches=5
-		> block // blockNum=5
-		Transfer(1) A-B : 10 (1) // numTx=7
-		> batch // numBatches=6
-		> block // blockNum=6
-	`
-
-	const numBatches int = 6
-	const numTx int = 7
-	const blockNum = 6 - 1
-
-	tc := til.NewContext(uint16(0), common.RollupConstMaxL1UserTx)
-	tilCfgExtra := til.ConfigExtra{
-		BootCoordAddr: ethCommon.HexToAddress("0xE39fEc6224708f0772D2A74fd3f9055A90E0A9f2"),
-		CoordUser:     "A",
-	}
-	blocks, err := tc.GenerateBlocks(set)
-	require.NoError(t, err)
-	err = tc.FillBlocksExtra(blocks, &tilCfgExtra)
-	require.NoError(t, err)
-
-	// Sanity check
-	require.Equal(t, blockNum, len(blocks))
-
-	// Adding one batch per block
-	// batch frequency can be chosen
-	const frequency int = 15
-
-	for i := range blocks {
-		blocks[i].Block.Timestamp = time.Now().Add(-time.Second * time.Duration(frequency*(len(blocks)-i)))
-		err = historyDB.AddBlockSCData(&blocks[i])
-		assert.NoError(t, err)
-	}
-
-	res, err := historyDBWithACC.GetMetricsAPI(common.BatchNum(numBatches))
-	assert.NoError(t, err)
-
-	assert.Equal(t, float64(numTx)/float64(numBatches), res.TransactionsPerBatch)
-
-	// Frequency is not exactly the desired one, some decimals may appear
-	// There is a -2 as time for first and last batch is not taken into account
-	assert.InEpsilon(t, float64(frequency)*float64(numBatches-2)/float64(numBatches), res.BatchFrequency, 0.01)
-	assert.InEpsilon(t, float64(numTx)/float64(frequency*blockNum-frequency), res.TransactionsPerSecond, 0.01)
-	assert.Equal(t, int64(3), res.TotalAccounts)
-	assert.Equal(t, int64(3), res.TotalBJJs)
-	// Til does not set fees
-	assert.Equal(t, float64(0), res.AvgTransactionFee)
-}
-
-func TestGetMetricsAPIMoreThan24Hours(t *testing.T) {
-	test.WipeDB(historyDB.DB())
-
-	testUsersLen := 3
-	var set []til.Instruction
-	for user := 0; user < testUsersLen; user++ {
-		set = append(set, til.Instruction{
-			Typ:           common.TxTypeCreateAccountDeposit,
-			TokenID:       common.TokenID(0),
-			DepositAmount: big.NewInt(1000000),
-			Amount:        big.NewInt(0),
-			From:          fmt.Sprintf("User%02d", user),
-		})
-		set = append(set, til.Instruction{Typ: til.TypeNewBlock})
-	}
-	set = append(set, til.Instruction{Typ: til.TypeNewBatchL1})
-	set = append(set, til.Instruction{Typ: til.TypeNewBatchL1})
-	set = append(set, til.Instruction{Typ: til.TypeNewBlock})
-
-	// Transfers
-	const numBlocks int = 30
-	for x := 0; x < numBlocks; x++ {
-		set = append(set, til.Instruction{
-			Typ:           common.TxTypeTransfer,
-			TokenID:       common.TokenID(0),
-			DepositAmount: big.NewInt(1),
-			Amount:        big.NewInt(0),
-			From:          "User00",
-			To:            "User01",
-		})
-		set = append(set, til.Instruction{Typ: til.TypeNewBatch})
-		set = append(set, til.Instruction{Typ: til.TypeNewBlock})
-	}
-
-	var chainID uint16 = 0
-	tc := til.NewContext(chainID, common.RollupConstMaxL1UserTx)
-	blocks, err := tc.GenerateBlocksFromInstructions(set)
-	assert.NoError(t, err)
-
-	tilCfgExtra := til.ConfigExtra{
-		CoordUser: "A",
-	}
-	err = tc.FillBlocksExtra(blocks, &tilCfgExtra)
-	require.NoError(t, err)
-
-	const numBatches int = 2 + numBlocks
-	const blockNum = 4 + numBlocks
-
-	// Sanity check
-	require.Equal(t, blockNum, len(blocks))
-
-	// Adding one batch per block
-	// batch frequency can be chosen
-	const blockTime time.Duration = 3600 * time.Second
-	now := time.Now()
-	require.NoError(t, err)
-
-	for i := range blocks {
-		blocks[i].Block.Timestamp = now.Add(-time.Duration(len(blocks)-1-i) * blockTime)
-		err = historyDB.AddBlockSCData(&blocks[i])
-		assert.NoError(t, err)
-	}
-
-	res, err := historyDBWithACC.GetMetricsAPI(common.BatchNum(numBatches))
-	assert.NoError(t, err)
-
-	assert.InEpsilon(t, 1.0, res.TransactionsPerBatch, 0.1)
-
-	assert.InEpsilon(t, res.BatchFrequency, float64(blockTime/time.Second), 0.1)
-	assert.InEpsilon(t, 1.0/float64(blockTime/time.Second), res.TransactionsPerSecond, 0.1)
-	assert.Equal(t, int64(3), res.TotalAccounts)
-	assert.Equal(t, int64(3), res.TotalBJJs)
-	// Til does not set fees
-	assert.Equal(t, float64(0), res.AvgTransactionFee)
-}
-
-func TestGetMetricsAPIEmpty(t *testing.T) {
-	test.WipeDB(historyDB.DB())
-	_, err := historyDBWithACC.GetMetricsAPI(0)
-	assert.NoError(t, err)
-}
-
-func TestGetAvgTxFeeEmpty(t *testing.T) {
-	test.WipeDB(historyDB.DB())
-	_, err := historyDBWithACC.GetAvgTxFeeAPI()
-	assert.NoError(t, err)
-}
+// func TestGetMetricsAPI(t *testing.T) {
+// 	test.WipeDB(historyDB.DB())
+// 	set := `
+// 		Type: Blockchain
+//
+// 		AddToken(1)
+//
+// 		CreateAccountDeposit(1) A: 1000 // numTx=1
+// 		CreateAccountDeposit(1) B: 2000 // numTx=2
+// 		CreateAccountDeposit(1) C: 3000 //numTx=3
+//
+// 		// block 0 is stored as default in the DB
+// 		// block 1 does not exist
+// 		> batchL1 // numBatches=1
+// 		> batchL1 // numBatches=2
+// 		> block // blockNum=2
+//
+// 		Transfer(1) C-A : 10 (1) // numTx=4
+// 		> batch // numBatches=3
+// 		> block // blockNum=3
+// 		Transfer(1) B-C : 10 (1) // numTx=5
+// 		> batch // numBatches=5
+// 		> block // blockNum=4
+// 		Transfer(1) A-B : 10 (1) // numTx=6
+// 		> batch // numBatches=5
+// 		> block // blockNum=5
+// 		Transfer(1) A-B : 10 (1) // numTx=7
+// 		> batch // numBatches=6
+// 		> block // blockNum=6
+// 	`
+//
+// 	const numBatches int = 6
+// 	const numTx int = 7
+// 	const blockNum = 6 - 1
+//
+// 	tc := til.NewContext(uint16(0), common.RollupConstMaxL1UserTx)
+// 	tilCfgExtra := til.ConfigExtra{
+// 		BootCoordAddr: ethCommon.HexToAddress("0xE39fEc6224708f0772D2A74fd3f9055A90E0A9f2"),
+// 		CoordUser:     "A",
+// 	}
+// 	blocks, err := tc.GenerateBlocks(set)
+// 	require.NoError(t, err)
+// 	err = tc.FillBlocksExtra(blocks, &tilCfgExtra)
+// 	require.NoError(t, err)
+//
+// 	// Sanity check
+// 	require.Equal(t, blockNum, len(blocks))
+//
+// 	// Adding one batch per block
+// 	// batch frequency can be chosen
+// 	const frequency int = 15
+//
+// 	for i := range blocks {
+// 		blocks[i].Block.Timestamp = time.Now().Add(-time.Second * time.Duration(frequency*(len(blocks)-i)))
+// 		err = historyDB.AddBlockSCData(&blocks[i])
+// 		assert.NoError(t, err)
+// 	}
+//
+// 	res, err := historyDBWithACC.GetMetricsAPI(common.BatchNum(numBatches))
+// 	assert.NoError(t, err)
+//
+// 	assert.Equal(t, float64(numTx)/float64(numBatches), res.TransactionsPerBatch)
+//
+// 	// Frequency is not exactly the desired one, some decimals may appear
+// 	// There is a -2 as time for first and last batch is not taken into account
+// 	assert.InEpsilon(t, float64(frequency)*float64(numBatches-2)/float64(numBatches), res.BatchFrequency, 0.01)
+// 	assert.InEpsilon(t, float64(numTx)/float64(frequency*blockNum-frequency), res.TransactionsPerSecond, 0.01)
+// 	assert.Equal(t, int64(3), res.TotalAccounts)
+// 	assert.Equal(t, int64(3), res.TotalBJJs)
+// 	// Til does not set fees
+// 	assert.Equal(t, float64(0), res.AvgTransactionFee)
+// }
+//
+// func TestGetMetricsAPIMoreThan24Hours(t *testing.T) {
+// 	test.WipeDB(historyDB.DB())
+//
+// 	testUsersLen := 3
+// 	var set []til.Instruction
+// 	for user := 0; user < testUsersLen; user++ {
+// 		set = append(set, til.Instruction{
+// 			Typ:           common.TxTypeCreateAccountDeposit,
+// 			TokenID:       common.TokenID(0),
+// 			DepositAmount: big.NewInt(1000000),
+// 			Amount:        big.NewInt(0),
+// 			From:          fmt.Sprintf("User%02d", user),
+// 		})
+// 		set = append(set, til.Instruction{Typ: til.TypeNewBlock})
+// 	}
+// 	set = append(set, til.Instruction{Typ: til.TypeNewBatchL1})
+// 	set = append(set, til.Instruction{Typ: til.TypeNewBatchL1})
+// 	set = append(set, til.Instruction{Typ: til.TypeNewBlock})
+//
+// 	// Transfers
+// 	const numBlocks int = 30
+// 	for x := 0; x < numBlocks; x++ {
+// 		set = append(set, til.Instruction{
+// 			Typ:           common.TxTypeTransfer,
+// 			TokenID:       common.TokenID(0),
+// 			DepositAmount: big.NewInt(1),
+// 			Amount:        big.NewInt(0),
+// 			From:          "User00",
+// 			To:            "User01",
+// 		})
+// 		set = append(set, til.Instruction{Typ: til.TypeNewBatch})
+// 		set = append(set, til.Instruction{Typ: til.TypeNewBlock})
+// 	}
+//
+// 	var chainID uint16 = 0
+// 	tc := til.NewContext(chainID, common.RollupConstMaxL1UserTx)
+// 	blocks, err := tc.GenerateBlocksFromInstructions(set)
+// 	assert.NoError(t, err)
+//
+// 	tilCfgExtra := til.ConfigExtra{
+// 		CoordUser: "A",
+// 	}
+// 	err = tc.FillBlocksExtra(blocks, &tilCfgExtra)
+// 	require.NoError(t, err)
+//
+// 	const numBatches int = 2 + numBlocks
+// 	const blockNum = 4 + numBlocks
+//
+// 	// Sanity check
+// 	require.Equal(t, blockNum, len(blocks))
+//
+// 	// Adding one batch per block
+// 	// batch frequency can be chosen
+// 	const blockTime time.Duration = 3600 * time.Second
+// 	now := time.Now()
+// 	require.NoError(t, err)
+//
+// 	for i := range blocks {
+// 		blocks[i].Block.Timestamp = now.Add(-time.Duration(len(blocks)-1-i) * blockTime)
+// 		err = historyDB.AddBlockSCData(&blocks[i])
+// 		assert.NoError(t, err)
+// 	}
+//
+// 	res, err := historyDBWithACC.GetMetricsAPI(common.BatchNum(numBatches))
+// 	assert.NoError(t, err)
+//
+// 	assert.InEpsilon(t, 1.0, res.TransactionsPerBatch, 0.1)
+//
+// 	assert.InEpsilon(t, res.BatchFrequency, float64(blockTime/time.Second), 0.1)
+// 	assert.InEpsilon(t, 1.0/float64(blockTime/time.Second), res.TransactionsPerSecond, 0.1)
+// 	assert.Equal(t, int64(3), res.TotalAccounts)
+// 	assert.Equal(t, int64(3), res.TotalBJJs)
+// 	// Til does not set fees
+// 	assert.Equal(t, float64(0), res.AvgTransactionFee)
+// }
+//
+// func TestGetMetricsAPIEmpty(t *testing.T) {
+// 	test.WipeDB(historyDB.DB())
+// 	_, err := historyDBWithACC.GetMetricsAPI(0)
+// 	assert.NoError(t, err)
+// }
+//
+// func TestGetAvgTxFeeEmpty(t *testing.T) {
+// 	test.WipeDB(historyDB.DB())
+// 	_, err := historyDBWithACC.GetAvgTxFeeAPI()
+// 	assert.NoError(t, err)
+// }
 
 func TestGetLastL1TxsNum(t *testing.T) {
 	test.WipeDB(historyDB.DB())
@@ -1459,4 +1459,22 @@ func setTestBlocks(from, to int64) []common.Block {
 		panic(err)
 	}
 	return blocks
+}
+
+func TestNodeInfo(t *testing.T) {
+	test.WipeDB(historyDB.DB())
+
+	clientSetup := test.NewClientSetupExample()
+	constants := &Constants{
+		RollupConstants:   *clientSetup.RollupConstants,
+		AuctionConstants:  *clientSetup.AuctionConstants,
+		WDelayerConstants: *clientSetup.WDelayerConstants,
+		ChainID:           42,
+		HermezAddress:     clientSetup.AuctionConstants.HermezRollup,
+	}
+	err := historyDB.SetConstants(constants)
+	require.NoError(t, err)
+	dbConstants, err := historyDB.GetConstants()
+	require.NoError(t, err)
+	assert.Equal(t, constants, dbConstants)
 }

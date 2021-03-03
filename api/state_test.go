@@ -29,7 +29,7 @@ type testNetwork struct {
 }
 
 func TestSetRollupVariables(t *testing.T) {
-	api.h.SetRollupVariables(tc.rollupVars)
+	api.h.SetRollupVariables(&tc.rollupVars)
 	ni, err := api.h.GetNodeInfoAPI()
 	assert.NoError(t, err)
 	assertEqualRollupVariables(t, tc.rollupVars, ni.StateAPI.Rollup, true)
@@ -51,14 +51,14 @@ func assertEqualRollupVariables(t *testing.T, rollupVariables common.RollupVaria
 }
 
 func TestSetWDelayerVariables(t *testing.T) {
-	api.h.SetWDelayerVariables(tc.wdelayerVars)
+	api.h.SetWDelayerVariables(&tc.wdelayerVars)
 	ni, err := api.h.GetNodeInfoAPI()
 	assert.NoError(t, err)
 	assert.Equal(t, tc.wdelayerVars, ni.StateAPI.WithdrawalDelayer)
 }
 
 func TestSetAuctionVariables(t *testing.T) {
-	api.h.SetAuctionVariables(tc.auctionVars)
+	api.h.SetAuctionVariables(&tc.auctionVars)
 	ni, err := api.h.GetNodeInfoAPI()
 	assert.NoError(t, err)
 	assertEqualAuctionVariables(t, tc.auctionVars, ni.StateAPI.Auction)
@@ -165,9 +165,9 @@ func TestGetState(t *testing.T) {
 	lastBlock := tc.blocks[3]
 	lastBatchNum := common.BatchNum(12)
 	currentSlotNum := int64(1)
-	api.h.SetRollupVariables(tc.rollupVars)
-	api.h.SetWDelayerVariables(tc.wdelayerVars)
-	api.h.SetAuctionVariables(tc.auctionVars)
+	api.h.SetRollupVariables(&tc.rollupVars)
+	api.h.SetWDelayerVariables(&tc.wdelayerVars)
+	api.h.SetAuctionVariables(&tc.auctionVars)
 	err := api.h.UpdateNetworkInfo(lastBlock, lastBlock, lastBatchNum, currentSlotNum)
 	assert.NoError(t, err)
 	err = api.h.UpdateMetrics()

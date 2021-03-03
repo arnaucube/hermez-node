@@ -363,6 +363,27 @@ type RollupVariablesAPI struct {
 	SafeMode              bool                                          `json:"safeMode" meddler:"safe_mode"`
 }
 
+// NewRollupVariablesAPI creates a RollupVariablesAPI from common.RollupVariables
+func NewRollupVariablesAPI(rollupVariables *common.RollupVariables) *RollupVariablesAPI {
+	rollupVars := RollupVariablesAPI{
+		EthBlockNum:           rollupVariables.EthBlockNum,
+		FeeAddToken:           apitypes.NewBigIntStr(rollupVariables.FeeAddToken),
+		ForgeL1L2BatchTimeout: rollupVariables.ForgeL1L2BatchTimeout,
+		WithdrawalDelay:       rollupVariables.WithdrawalDelay,
+		SafeMode:              rollupVariables.SafeMode,
+	}
+
+	for i, bucket := range rollupVariables.Buckets {
+		rollupVars.Buckets[i] = BucketParamsAPI{
+			CeilUSD:             apitypes.NewBigIntStr(bucket.CeilUSD),
+			Withdrawals:         apitypes.NewBigIntStr(bucket.Withdrawals),
+			BlockWithdrawalRate: apitypes.NewBigIntStr(bucket.BlockWithdrawalRate),
+			MaxWithdrawals:      apitypes.NewBigIntStr(bucket.MaxWithdrawals),
+		}
+	}
+	return &rollupVars
+}
+
 // AuctionVariablesAPI are the variables of the Auction Smart Contract
 type AuctionVariablesAPI struct {
 	EthBlockNum int64 `json:"ethereumBlockNum" meddler:"eth_block_num"`
@@ -386,4 +407,29 @@ type AuctionVariablesAPI struct {
 	Outbidding uint16 `json:"outbidding" meddler:"outbidding" validate:"required"`
 	// SlotDeadline Number of blocks at the end of a slot in which any coordinator can forge if the winner has not forged one before
 	SlotDeadline uint8 `json:"slotDeadline" meddler:"slot_deadline" validate:"required"`
+}
+
+// NewAuctionVariablesAPI creates a AuctionVariablesAPI from common.AuctionVariables
+func NewAuctionVariablesAPI(auctionVariables *common.AuctionVariables) *AuctionVariablesAPI {
+	auctionVars := AuctionVariablesAPI{
+		EthBlockNum:              auctionVariables.EthBlockNum,
+		DonationAddress:          auctionVariables.DonationAddress,
+		BootCoordinator:          auctionVariables.BootCoordinator,
+		BootCoordinatorURL:       auctionVariables.BootCoordinatorURL,
+		DefaultSlotSetBidSlotNum: auctionVariables.DefaultSlotSetBidSlotNum,
+		ClosedAuctionSlots:       auctionVariables.ClosedAuctionSlots,
+		OpenAuctionSlots:         auctionVariables.OpenAuctionSlots,
+		Outbidding:               auctionVariables.Outbidding,
+		SlotDeadline:             auctionVariables.SlotDeadline,
+	}
+
+	for i, slot := range auctionVariables.DefaultSlotSetBid {
+		auctionVars.DefaultSlotSetBid[i] = apitypes.NewBigIntStr(slot)
+	}
+
+	for i, ratio := range auctionVariables.AllocationRatio {
+		auctionVars.AllocationRatio[i] = ratio
+	}
+
+	return &auctionVars
 }

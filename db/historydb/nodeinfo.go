@@ -61,11 +61,13 @@ type Constants struct {
 	ChainID           uint16
 	HermezAddress     ethCommon.Address
 }
+
 type NodeInfo struct {
-	MaxPoolTxs uint32    `meddler:"max_pool_txs"`
-	MinFeeUSD  float64   `meddler:"min_fee"`
-	StateAPI   StateAPI  `meddler:"state,json"`
-	Constants  Constants `meddler:"constants,json"`
+	ItemID     int        `meddler:"item_id"`
+	MaxPoolTxs *uint32    `meddler:"max_pool_txs"`
+	MinFeeUSD  *float64   `meddler:"min_fee"`
+	StateAPI   *StateAPI  `meddler:"state,json"`
+	Constants  *Constants `meddler:"constants,json"`
 }
 
 func (hdb *HistoryDB) GetNodeInfo() (*NodeInfo, error) {
@@ -76,73 +78,63 @@ func (hdb *HistoryDB) GetNodeInfo() (*NodeInfo, error) {
 	return ni, tracerr.Wrap(err)
 }
 
+func (hdb *HistoryDB) SetConstants(constants *Constants) error {
+	_constants := struct {
+		Constants *Constants `meddler:"constants,json"`
+	}{constants}
+	values, err := meddler.Default.Values(&_constants, false)
+	if err != nil {
+		return tracerr.Wrap(err)
+	}
+	_, err = hdb.dbWrite.Exec(
+		"UPDATE node_info SET constants = $1 WHERE item_id = 1;",
+		values[0],
+	)
+	return tracerr.Wrap(err)
+}
+
+func (hdb *HistoryDB) GetConstants() (*Constants, error) {
+	var nodeInfo NodeInfo
+	err := meddler.QueryRow(
+		hdb.dbRead, &nodeInfo,
+		"SELECT constants FROM node_info WHERE item_id = 1;",
+	)
+	return nodeInfo.Constants, tracerr.Wrap(err)
+}
+
 func (hdb *HistoryDB) SetInitialNodeInfo(maxPoolTxs uint32, minFeeUSD float64, constants *Constants) error {
 	ni := &NodeInfo{
-		MaxPoolTxs: maxPoolTxs,
-		MinFeeUSD:  minFeeUSD,
-		Constants:  *constants,
+		MaxPoolTxs: &maxPoolTxs,
+		MinFeeUSD:  &minFeeUSD,
+		Constants:  constants,
 	}
 	return tracerr.Wrap(meddler.Insert(hdb.dbWrite, "node_info", ni))
 }
 
 // SetRollupVariables set Status.Rollup variables
-func (hdb *HistoryDB) SetRollupVariables(rollupVariables common.RollupVariables) error {
+func (hdb *HistoryDB) SetRollupVariables(rollupVariables *common.RollupVariables) error {
 	setUpdatedNodeInfo := func(txn *sqlx.Tx, ni *NodeInfo) error {
-		var rollupVars RollupVariablesAPI
-		rollupVars.EthBlockNum = rollupVariables.EthBlockNum
-		rollupVars.FeeAddToken = apitypes.NewBigIntStr(rollupVariables.FeeAddToken)
-		rollupVars.ForgeL1L2BatchTimeout = rollupVariables.ForgeL1L2BatchTimeout
-		rollupVars.WithdrawalDelay = rollupVariables.WithdrawalDelay
-
-		for i, bucket := range rollupVariables.Buckets {
-			var apiBucket BucketParamsAPI
-			apiBucket.CeilUSD = apitypes.NewBigIntStr(bucket.CeilUSD)
-			apiBucket.Withdrawals = apitypes.NewBigIntStr(bucket.Withdrawals)
-			apiBucket.BlockWithdrawalRate = apitypes.NewBigIntStr(bucket.BlockWithdrawalRate)
-			apiBucket.MaxWithdrawals = apitypes.NewBigIntStr(bucket.MaxWithdrawals)
-			rollupVars.Buckets[i] = apiBucket
-		}
-
-		rollupVars.SafeMode = rollupVariables.SafeMode
-		ni.StateAPI.Rollup = rollupVars
+		rollupVars := NewRollupVariablesAPI(rollupVariables)
+		ni.StateAPI.Rollup = *rollupVars
 		return nil
 	}
 	return hdb.updateNodeInfo(setUpdatedNodeInfo)
 }
 
 // SetWDelayerVariables set Status.WithdrawalDelayer variables
-func (hdb *HistoryDB) SetWDelayerVariables(wDelayerVariables common.WDelayerVariables) error {
+func (hdb *HistoryDB) SetWDelayerVariables(wDelayerVariables *common.WDelayerVariables) error {
 	setUpdatedNodeInfo := func(txn *sqlx.Tx, ni *NodeInfo) error {
-		ni.StateAPI.WithdrawalDelayer = wDelayerVariables
+		ni.StateAPI.WithdrawalDelayer = *wDelayerVariables
 		return nil
 	}
 	return hdb.updateNodeInfo(setUpdatedNodeInfo)
 }
 
 // SetAuctionVariables set Status.Auction variables
-func (hdb *HistoryDB) SetAuctionVariables(auctionVariables common.AuctionVariables) error {
+func (hdb *HistoryDB) SetAuctionVariables(auctionVariables *common.AuctionVariables) error {
 	setUpdatedNodeInfo := func(txn *sqlx.Tx, ni *NodeInfo) error {
-		var auctionVars AuctionVariablesAPI
-
-		auctionVars.EthBlockNum = auctionVariables.EthBlockNum
-		auctionVars.DonationAddress = auctionVariables.DonationAddress
-		auctionVars.BootCoordinator = auctionVariables.BootCoordinator
-		auctionVars.BootCoordinatorURL = auctionVariables.BootCoordinatorURL
-		auctionVars.DefaultSlotSetBidSlotNum = auctionVariables.DefaultSlotSetBidSlotNum
-		auctionVars.ClosedAuctionSlots = auctionVariables.ClosedAuctionSlots
-		auctionVars.OpenAuctionSlots = auctionVariables.OpenAuctionSlots
-		auctionVars.Outbidding = auctionVariables.Outbidding
-		auctionVars.SlotDeadline = auctionVariables.SlotDeadline
-
-		for i, slot := range auctionVariables.DefaultSlotSetBid {
-			auctionVars.DefaultSlotSetBid[i] = apitypes.NewBigIntStr(slot)
-		}
-
-		for i, ratio := range auctionVariables.AllocationRatio {
-			auctionVars.AllocationRatio[i] = ratio
-		}
-
-		ni.StateAPI.Auction = auctionVars
+		auctionVars := NewAuctionVariablesAPI(auctionVariables)
+		ni.StateAPI.Auction = *auctionVars
 		return nil
 	}
 	return hdb.updateNodeInfo(setUpdatedNodeInfo)
@@ -473,11 +465,11 @@ func (hdb *HistoryDB) UpdateRecommendedFee() error {
 			avgTransactionFee = 0
 		}
 		ni.StateAPI.RecommendedFee.ExistingAccount =
-			math.Max(avgTransactionFee, ni.MinFeeUSD)
+			math.Max(avgTransactionFee, *ni.MinFeeUSD)
 		ni.StateAPI.RecommendedFee.CreatesAccount =
-			math.Max(createAccountExtraFeePercentage*avgTransactionFee, ni.MinFeeUSD)
+			math.Max(createAccountExtraFeePercentage*avgTransactionFee, *ni.MinFeeUSD)
 		ni.StateAPI.RecommendedFee.CreatesAccountAndRegister =
-			math.Max(createAccountInternalExtraFeePercentage*avgTransactionFee, ni.MinFeeUSD)
+			math.Max(createAccountInternalExtraFeePercentage*avgTransactionFee, *ni.MinFeeUSD)
 		return nil
 	}
 	return hdb.updateNodeInfo(setUpdatedNodeInfo)
