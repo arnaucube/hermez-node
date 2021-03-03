@@ -11,9 +11,9 @@ import (
 	"github.com/hermeznetwork/hermez-node/apitypes"
 	"github.com/hermeznetwork/hermez-node/common"
 	"github.com/hermeznetwork/hermez-node/db"
+	"github.com/hermeznetwork/tracerr"
 	"github.com/jmoiron/sqlx"
 	"github.com/russross/meddler"
-	"github.com/ztrue/tracerr"
 )
 
 const (
@@ -484,7 +484,7 @@ func (hdb *HistoryDB) UpdateRecommendedFee() error {
 }
 
 func (hdb *HistoryDB) updateNodeInfo(setUpdatedNodeInfo func(*sqlx.Tx, *NodeInfo) error) error {
-	// Create a SQL transaction o read and update atomicaly
+	// Create a SQL transaction or read and update atomicaly
 	txn, err := hdb.dbWrite.Beginx()
 	if err != nil {
 		return tracerr.Wrap(err)
