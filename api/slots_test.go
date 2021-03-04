@@ -101,7 +101,7 @@ func TestGetSlot(t *testing.T) {
 	)
 	ni, err := api.h.GetNodeInfoAPI()
 	assert.NoError(t, err)
-	emptySlot := api.getEmptyTestSlot(slotNum, ni.StateAPI.Network.LastSyncBlock, tc.auctionVars)
+	emptySlot := api.getEmptyTestSlot(slotNum, ni.APIState.Network.LastSyncBlock, tc.auctionVars)
 	assertSlot(t, emptySlot, fetchedSlot)
 
 	// Invalid slotNum
@@ -132,7 +132,7 @@ func TestGetSlots(t *testing.T) {
 	ni, err := api.h.GetNodeInfoAPI()
 	assert.NoError(t, err)
 	for i := tc.slots[len(tc.slots)-1].SlotNum; i < maxSlotNum; i++ {
-		emptySlot := api.getEmptyTestSlot(i+1, ni.StateAPI.Network.LastSyncBlock, tc.auctionVars)
+		emptySlot := api.getEmptyTestSlot(i+1, ni.APIState.Network.LastSyncBlock, tc.auctionVars)
 		allSlots = append(allSlots, emptySlot)
 	}
 	assertSlots(t, allSlots, fetchedSlots)

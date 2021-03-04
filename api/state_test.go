@@ -32,7 +32,7 @@ func TestSetRollupVariables(t *testing.T) {
 	api.h.SetRollupVariables(&tc.rollupVars)
 	ni, err := api.h.GetNodeInfoAPI()
 	assert.NoError(t, err)
-	assertEqualRollupVariables(t, tc.rollupVars, ni.StateAPI.Rollup, true)
+	assertEqualRollupVariables(t, tc.rollupVars, ni.APIState.Rollup, true)
 }
 
 func assertEqualRollupVariables(t *testing.T, rollupVariables common.RollupVariables, apiVariables historydb.RollupVariablesAPI, checkBuckets bool) {
@@ -54,14 +54,14 @@ func TestSetWDelayerVariables(t *testing.T) {
 	api.h.SetWDelayerVariables(&tc.wdelayerVars)
 	ni, err := api.h.GetNodeInfoAPI()
 	assert.NoError(t, err)
-	assert.Equal(t, tc.wdelayerVars, ni.StateAPI.WithdrawalDelayer)
+	assert.Equal(t, tc.wdelayerVars, ni.APIState.WithdrawalDelayer)
 }
 
 func TestSetAuctionVariables(t *testing.T) {
 	api.h.SetAuctionVariables(&tc.auctionVars)
 	ni, err := api.h.GetNodeInfoAPI()
 	assert.NoError(t, err)
-	assertEqualAuctionVariables(t, tc.auctionVars, ni.StateAPI.Auction)
+	assertEqualAuctionVariables(t, tc.auctionVars, ni.APIState.Auction)
 }
 
 func assertEqualAuctionVariables(t *testing.T, auctionVariables common.AuctionVariables, apiVariables historydb.AuctionVariablesAPI) {
@@ -117,12 +117,12 @@ func TestUpdateNetworkInfo(t *testing.T) {
 	assert.NoError(t, err)
 	ni, err := api.h.GetNodeInfoAPI()
 	assert.NoError(t, err)
-	assert.Equal(t, lastBlock.Num, ni.StateAPI.Network.LastSyncBlock)
-	assert.Equal(t, lastBatchNum, ni.StateAPI.Network.LastBatch.BatchNum)
-	assert.Equal(t, currentSlotNum, ni.StateAPI.Network.CurrentSlot)
-	assert.Equal(t, int(ni.StateAPI.Auction.ClosedAuctionSlots)+1, len(ni.StateAPI.Network.NextForgers))
-	assert.Equal(t, ni.StateAPI.Rollup.Buckets[0].Withdrawals, apitypes.NewBigIntStr(big.NewInt(123)))
-	assert.Equal(t, ni.StateAPI.Rollup.Buckets[2].Withdrawals, apitypes.NewBigIntStr(big.NewInt(43)))
+	assert.Equal(t, lastBlock.Num, ni.APIState.Network.LastSyncBlock)
+	assert.Equal(t, lastBatchNum, ni.APIState.Network.LastBatch.BatchNum)
+	assert.Equal(t, currentSlotNum, ni.APIState.Network.CurrentSlot)
+	assert.Equal(t, int(ni.APIState.Auction.ClosedAuctionSlots)+1, len(ni.APIState.Network.NextForgers))
+	assert.Equal(t, ni.APIState.Rollup.Buckets[0].Withdrawals, apitypes.NewBigIntStr(big.NewInt(123)))
+	assert.Equal(t, ni.APIState.Rollup.Buckets[2].Withdrawals, apitypes.NewBigIntStr(big.NewInt(43)))
 }
 
 func TestUpdateMetrics(t *testing.T) {
@@ -137,12 +137,12 @@ func TestUpdateMetrics(t *testing.T) {
 	assert.NoError(t, err)
 	ni, err := api.h.GetNodeInfoAPI()
 	assert.NoError(t, err)
-	assert.Greater(t, ni.StateAPI.Metrics.TransactionsPerBatch, float64(0))
-	assert.Greater(t, ni.StateAPI.Metrics.BatchFrequency, float64(0))
-	assert.Greater(t, ni.StateAPI.Metrics.TransactionsPerSecond, float64(0))
-	assert.Greater(t, ni.StateAPI.Metrics.TotalAccounts, int64(0))
-	assert.Greater(t, ni.StateAPI.Metrics.TotalBJJs, int64(0))
-	assert.Greater(t, ni.StateAPI.Metrics.AvgTransactionFee, float64(0))
+	assert.Greater(t, ni.APIState.Metrics.TransactionsPerBatch, float64(0))
+	assert.Greater(t, ni.APIState.Metrics.BatchFrequency, float64(0))
+	assert.Greater(t, ni.APIState.Metrics.TransactionsPerSecond, float64(0))
+	assert.Greater(t, ni.APIState.Metrics.TotalAccounts, int64(0))
+	assert.Greater(t, ni.APIState.Metrics.TotalBJJs, int64(0))
+	assert.Greater(t, ni.APIState.Metrics.AvgTransactionFee, float64(0))
 }
 
 func TestUpdateRecommendedFee(t *testing.T) {
@@ -154,7 +154,7 @@ func TestUpdateRecommendedFee(t *testing.T) {
 	}
 	ni, err := api.h.GetNodeInfoAPI()
 	assert.NoError(t, err)
-	assert.Greater(t, ni.StateAPI.RecommendedFee.ExistingAccount, minFeeUSD)
+	assert.Greater(t, ni.APIState.RecommendedFee.ExistingAccount, minFeeUSD)
 	// assert.Equal(t, ni.StateAPI.RecommendedFee.CreatesAccount,
 	// 	ni.StateAPI.RecommendedFee.ExistingAccount*createAccountExtraFeePercentage)
 	// assert.Equal(t, ni.StateAPI.RecommendedFee.CreatesAccountAndRegister,

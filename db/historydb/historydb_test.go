@@ -1464,6 +1464,9 @@ func setTestBlocks(from, to int64) []common.Block {
 func TestNodeInfo(t *testing.T) {
 	test.WipeDB(historyDB.DB())
 
+	err := historyDB.SetAPIState(&APIState{})
+	require.NoError(t, err)
+
 	clientSetup := test.NewClientSetupExample()
 	constants := &Constants{
 		RollupConstants:   *clientSetup.RollupConstants,
@@ -1472,9 +1475,48 @@ func TestNodeInfo(t *testing.T) {
 		ChainID:           42,
 		HermezAddress:     clientSetup.AuctionConstants.HermezRollup,
 	}
-	err := historyDB.SetConstants(constants)
+	err = historyDB.SetConstants(constants)
 	require.NoError(t, err)
+
+	// Test parameters
+	apiState := &APIState{
+		NodePublicConfig: NodePublicConfig{
+			ForgeDelay: 3.1,
+		},
+		Network: Network{
+			LastEthBlock:  12,
+			LastSyncBlock: 34,
+		},
+		Metrics: Metrics{
+			TransactionsPerBatch: 1.1,
+			TotalAccounts:        42,
+		},
+		Rollup:            *NewRollupVariablesAPI(clientSetup.RollupVariables),
+		Auction:           *NewAuctionVariablesAPI(clientSetup.AuctionVariables),
+		WithdrawalDelayer: *clientSetup.WDelayerVariables,
+		RecommendedFee: common.RecommendedFee{
+			ExistingAccount: 0.15,
+		},
+	}
+	err = historyDB.SetAPIState(apiState)
+	require.NoError(t, err)
+
+	nodeConfig := &NodeConfig{
+		MaxPoolTxs: 123,
+		MinFeeUSD:  0.5,
+	}
+	err = historyDB.SetNodeConfig(nodeConfig)
+	require.NoError(t, err)
+
 	dbConstants, err := historyDB.GetConstants()
 	require.NoError(t, err)
 	assert.Equal(t, constants, dbConstants)
+
+	dbNodeConfig, err := historyDB.GetNodeConfig()
+	require.NoError(t, err)
+	assert.Equal(t, nodeConfig, dbNodeConfig)
+
+	dbAPIState, err := historyDB.GetAPIState()
+	require.NoError(t, err)
+	assert.Equal(t, apiState, dbAPIState)
 }

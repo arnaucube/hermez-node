@@ -664,8 +664,9 @@ CREATE TABLE account_creation_auth (
 CREATE TABLE node_info (
     item_id SERIAL PRIMARY KEY,
     state BYTEA,            -- object returned by GET /state
-    max_pool_txs BIGINT,    -- L2DB config
-    min_fee NUMERIC,        -- L2DB config
+    config BYTEA,           -- Node config
+    -- max_pool_txs BIGINT,    -- L2DB config
+    -- min_fee NUMERIC,        -- L2DB config
     constants BYTEA         -- info of the network that is constant
 );
 INSERT INTO node_info(item_id) VALUES (1); -- Always have a single row that we will update

@@ -12,5 +12,5 @@ func (a *API) getState(c *gin.Context) {
 		retBadReq(err, c)
 		return
 	}
-	c.JSON(http.StatusOK, ni.StateAPI)
+	c.JSON(http.StatusOK, ni.APIState)
 }

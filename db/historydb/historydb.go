@@ -841,6 +841,31 @@ func (hdb *HistoryDB) GetAllBucketUpdates() ([]common.BucketUpdate, error) {
 	return db.SlicePtrsToSlice(bucketUpdates).([]common.BucketUpdate), tracerr.Wrap(err)
 }
 
+func (hdb *HistoryDB) getBucketUpdatesAPI(txn *sqlx.Tx) ([]BucketUpdateAPI, error) {
+	var bucketUpdates []*BucketUpdateAPI
+	// var bucketUpdates []*common.BucketUpdate
+	err := meddler.QueryAll(
+		txn, &bucketUpdates,
+		`SELECT num_bucket, withdrawals FROM bucket_update 
+			WHERE item_id in(SELECT max(item_id) FROM bucket_update 
+			group by num_bucket) 
+			ORDER BY num_bucket ASC;`,
+	)
+	return db.SlicePtrsToSlice(bucketUpdates).([]BucketUpdateAPI), tracerr.Wrap(err)
+}
+
+func (hdb *HistoryDB) getMinBidInfo(txn *sqlx.Tx,
+	currentSlot, lastClosedSlot int64) ([]MinBidInfo, error) {
+	minBidInfo := []*MinBidInfo{}
+	query := `
+		SELECT DISTINCT default_slot_set_bid, default_slot_set_bid_slot_num FROM auction_vars
+		WHERE default_slot_set_bid_slot_num < $1
+		ORDER BY default_slot_set_bid_slot_num DESC
+		LIMIT $2;`
+	err := meddler.QueryAll(txn, &minBidInfo, query, lastClosedSlot, int(lastClosedSlot-currentSlot)+1)
+	return db.SlicePtrsToSlice(minBidInfo).([]MinBidInfo), tracerr.Wrap(err)
+}
+
 func (hdb *HistoryDB) addTokenExchanges(d meddler.DB, tokenExchanges []common.TokenExchange) error {
 	if len(tokenExchanges) == 0 {
 		return nil
