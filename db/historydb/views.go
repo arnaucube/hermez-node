@@ -302,8 +302,8 @@ type BatchAPI struct {
 	LastItem      uint64                 `json:"-" meddler:"last_item"`
 }
 
-// Metrics define metrics of the network
-type Metrics struct {
+// MetricsAPI define metrics of the network
+type MetricsAPI struct {
 	TransactionsPerBatch   float64 `json:"transactionsPerBatch"`
 	BatchFrequency         float64 `json:"batchFrequency"`
 	TransactionsPerSecond  float64 `json:"transactionsPerSecond"`

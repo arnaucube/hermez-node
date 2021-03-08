@@ -841,20 +841,7 @@ func (hdb *HistoryDB) GetAllBucketUpdates() ([]common.BucketUpdate, error) {
 	return db.SlicePtrsToSlice(bucketUpdates).([]common.BucketUpdate), tracerr.Wrap(err)
 }
 
-func (hdb *HistoryDB) getBucketUpdatesAPI(txn *sqlx.Tx) ([]BucketUpdateAPI, error) {
-	var bucketUpdates []*BucketUpdateAPI
-	// var bucketUpdates []*common.BucketUpdate
-	err := meddler.QueryAll(
-		txn, &bucketUpdates,
-		`SELECT num_bucket, withdrawals FROM bucket_update 
-			WHERE item_id in(SELECT max(item_id) FROM bucket_update 
-			group by num_bucket) 
-			ORDER BY num_bucket ASC;`,
-	)
-	return db.SlicePtrsToSlice(bucketUpdates).([]BucketUpdateAPI), tracerr.Wrap(err)
-}
-
-func (hdb *HistoryDB) getMinBidInfo(txn *sqlx.Tx,
+func (hdb *HistoryDB) getMinBidInfo(d meddler.DB,
 	currentSlot, lastClosedSlot int64) ([]MinBidInfo, error) {
 	minBidInfo := []*MinBidInfo{}
 	query := `
@@ -862,7 +849,7 @@ func (hdb *HistoryDB) getMinBidInfo(txn *sqlx.Tx,
 		WHERE default_slot_set_bid_slot_num < $1
 		ORDER BY default_slot_set_bid_slot_num DESC
 		LIMIT $2;`
-	err := meddler.QueryAll(txn, &minBidInfo, query, lastClosedSlot, int(lastClosedSlot-currentSlot)+1)
+	err := meddler.QueryAll(d, &minBidInfo, query, lastClosedSlot, int(lastClosedSlot-currentSlot)+1)
 	return db.SlicePtrsToSlice(minBidInfo).([]MinBidInfo), tracerr.Wrap(err)
 }
 
@@ -1182,4 +1169,50 @@ func (hdb *HistoryDB) GetTokensTest() ([]TokenWithUSD, error) {
 		return []TokenWithUSD{}, nil
 	}
 	return db.SlicePtrsToSlice(tokens).([]TokenWithUSD), nil
+}
+
+// UpdateRecommendedFee update Status.RecommendedFee information
+func (hdb *HistoryDB) GetRecommendedFee(minFeeUSD float64) (*common.RecommendedFee, error) {
+	var recommendedFee common.RecommendedFee
+	// Get total txs and the batch of the first selected tx of the last hour
+	type totalTxsSinceBatchNum struct {
+		TotalTxs      int             `meddler:"total_txs"`
+		FirstBatchNum common.BatchNum `meddler:"batch_num"`
+	}
+	ttsbn := &totalTxsSinceBatchNum{}
+	if err := meddler.QueryRow(
+		hdb.dbRead, ttsbn, `SELECT COUNT(tx.*) as total_txs, 
+			COALESCE (MIN(tx.batch_num), 0) as batch_num 
+			FROM tx INNER JOIN block ON tx.eth_block_num = block.eth_block_num
+			WHERE block.timestamp >= NOW() - INTERVAL '1 HOURS';`,
+	); err != nil {
+		return nil, tracerr.Wrap(err)
+	}
+	// Get the amount of batches and acumulated fees for the last hour
+	type totalBatchesAndFee struct {
+		TotalBatches int     `meddler:"total_batches"`
+		TotalFees    float64 `meddler:"total_fees"`
+	}
+	tbf := &totalBatchesAndFee{}
+	if err := meddler.QueryRow(
+		hdb.dbRead, tbf, `SELECT COUNT(*) AS total_batches, 
+			COALESCE (SUM(total_fees_usd), 0) AS total_fees FROM batch 
+			WHERE batch_num > $1;`, ttsbn.FirstBatchNum,
+	); err != nil {
+		return nil, tracerr.Wrap(err)
+	}
+	// Update NodeInfo struct
+	var avgTransactionFee float64
+	if ttsbn.TotalTxs > 0 {
+		avgTransactionFee = tbf.TotalFees / float64(ttsbn.TotalTxs)
+	} else {
+		avgTransactionFee = 0
+	}
+	recommendedFee.ExistingAccount =
+		math.Max(avgTransactionFee, minFeeUSD)
+	recommendedFee.CreatesAccount =
+		math.Max(createAccountExtraFeePercentage*avgTransactionFee, minFeeUSD)
+	recommendedFee.CreatesAccountAndRegister =
+		math.Max(createAccountInternalExtraFeePercentage*avgTransactionFee, minFeeUSD)
+	return &recommendedFee, nil
 }

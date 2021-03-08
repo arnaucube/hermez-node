@@ -185,8 +185,8 @@ func NewCoordinator(cfg Config,
 	batchBuilder *batchbuilder.BatchBuilder,
 	serverProofs []prover.Client,
 	ethClient eth.ClientInterface,
-	scConsts *synchronizer.SCConsts,
-	initSCVars *synchronizer.SCVariables,
+	scConsts *common.SCConsts,
+	initSCVars *common.SCVariables,
 ) (*Coordinator, error) {
 	// nolint reason: hardcoded `1.0`, by design the percentage can't be over 100%
 	if cfg.L1BatchTimeoutPerc >= 1.0 { //nolint:gomnd

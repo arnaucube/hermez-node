@@ -13,7 +13,7 @@ import (
 
 type testStatus struct {
 	Network           testNetwork                   `json:"network"`
-	Metrics           historydb.Metrics             `json:"metrics"`
+	Metrics           historydb.MetricsAPI          `json:"metrics"`
 	Rollup            historydb.RollupVariablesAPI  `json:"rollup"`
 	Auction           historydb.AuctionVariablesAPI `json:"auction"`
 	WithdrawalDelayer common.WDelayerVariables      `json:"withdrawalDelayer"`
@@ -21,11 +21,11 @@ type testStatus struct {
 }
 
 type testNetwork struct {
-	LastEthBlock  int64                  `json:"lastEthereumBlock"`
-	LastSyncBlock int64                  `json:"lastSynchedBlock"`
-	LastBatch     testBatch              `json:"lastBatch"`
-	CurrentSlot   int64                  `json:"currentSlot"`
-	NextForgers   []historydb.NextForger `json:"nextForgers"`
+	LastEthBlock  int64                     `json:"lastEthereumBlock"`
+	LastSyncBlock int64                     `json:"lastSynchedBlock"`
+	LastBatch     testBatch                 `json:"lastBatch"`
+	CurrentSlot   int64                     `json:"currentSlot"`
+	NextForgers   []historydb.NextForgerAPI `json:"nextForgers"`
 }
 
 func TestSetRollupVariables(t *testing.T) {
@@ -211,7 +211,7 @@ func TestGetState(t *testing.T) {
 	// 	status.RecommendedFee.ExistingAccount*createAccountInternalExtraFeePercentage)
 }
 
-func assertNextForgers(t *testing.T, expected, actual []historydb.NextForger) {
+func assertNextForgers(t *testing.T, expected, actual []historydb.NextForgerAPI) {
 	assert.Equal(t, len(expected), len(actual))
 	for i := range expected {
 		// ignore timestamps and other metadata

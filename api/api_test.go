@@ -180,7 +180,7 @@ type testCommon struct {
 	auctionVars      common.AuctionVariables
 	rollupVars       common.RollupVariables
 	wdelayerVars     common.WDelayerVariables
-	nextForgers      []historydb.NextForger
+	nextForgers      []historydb.NextForgerAPI
 }
 
 var tc testCommon
@@ -455,14 +455,14 @@ func TestMain(m *testing.M) {
 	if err = api.h.AddBids(bids); err != nil {
 		panic(err)
 	}
-	bootForger := historydb.NextForger{
+	bootForger := historydb.NextForgerAPI{
 		Coordinator: historydb.CoordinatorAPI{
 			Forger: auctionVars.BootCoordinator,
 			URL:    auctionVars.BootCoordinatorURL,
 		},
 	}
 	// Set next forgers: set all as boot coordinator then replace the non boot coordinators
-	nextForgers := []historydb.NextForger{}
+	nextForgers := []historydb.NextForgerAPI{}
 	var initBlock int64 = 140
 	var deltaBlocks int64 = 40
 	for i := 1; i < int(auctionVars.ClosedAuctionSlots)+2; i++ {
