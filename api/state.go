@@ -3,6 +3,7 @@ package api
 import (
 	"database/sql"
 	"net/http"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hermeznetwork/hermez-node/common"
@@ -19,30 +20,39 @@ func (a *API) getState(c *gin.Context) {
 	c.JSON(http.StatusOK, stateAPI)
 }
 
-type APIStateUpdater struct {
+// StateAPIUpdater is an utility object to facilitate updating the StateAPI
+type StateAPIUpdater struct {
 	hdb    *historydb.HistoryDB
 	state  historydb.StateAPI
 	config historydb.NodeConfig
 	vars   common.SCVariablesPtr
 	consts historydb.Constants
+	rw     sync.RWMutex
 }
 
-func NewAPIStateUpdater(hdb *historydb.HistoryDB, config *historydb.NodeConfig, vars *common.SCVariables,
-	consts *historydb.Constants) *APIStateUpdater {
-	u := APIStateUpdater{
+// NewStateAPIUpdater creates a new StateAPIUpdater
+func NewStateAPIUpdater(hdb *historydb.HistoryDB, config *historydb.NodeConfig, vars *common.SCVariables,
+	consts *historydb.Constants) *StateAPIUpdater {
+	u := StateAPIUpdater{
 		hdb:    hdb,
 		config: *config,
 		consts: *consts,
 	}
-	u.SetSCVars(&common.SCVariablesPtr{&vars.Rollup, &vars.Auction, &vars.WDelayer})
+	u.SetSCVars(vars.AsPtr())
 	return &u
 }
 
-func (u *APIStateUpdater) Store() error {
-	return tracerr.Wrap(u.hdb.SetAPIState(&u.state))
+// Store the State in the HistoryDB
+func (u *StateAPIUpdater) Store() error {
+	u.rw.RLock()
+	defer u.rw.RUnlock()
+	return tracerr.Wrap(u.hdb.SetStateInternalAPI(&u.state))
 }
 
-func (u *APIStateUpdater) SetSCVars(vars *common.SCVariablesPtr) {
+// SetSCVars sets the smart contract vars (ony updates those that are not nil)
+func (u *StateAPIUpdater) SetSCVars(vars *common.SCVariablesPtr) {
+	u.rw.Lock()
+	defer u.rw.Unlock()
 	if vars.Rollup != nil {
 		u.vars.Rollup = vars.Rollup
 		rollupVars := historydb.NewRollupVariablesAPI(u.vars.Rollup)
@@ -59,25 +69,47 @@ func (u *APIStateUpdater) SetSCVars(vars *common.SCVariablesPtr) {
 	}
 }
 
-func (u *APIStateUpdater) UpdateMetrics() error {
-	if u.state.Network.LastBatch == nil {
+// UpdateRecommendedFee update Status.RecommendedFee information
+func (u *StateAPIUpdater) UpdateRecommendedFee() error {
+	recommendedFee, err := u.hdb.GetRecommendedFee(u.config.MinFeeUSD)
+	if err != nil {
+		return tracerr.Wrap(err)
+	}
+	u.rw.Lock()
+	u.state.RecommendedFee = *recommendedFee
+	u.rw.Unlock()
+	return nil
+}
+
+// UpdateMetrics update Status.Metrics information
+func (u *StateAPIUpdater) UpdateMetrics() error {
+	u.rw.RLock()
+	lastBatch := u.state.Network.LastBatch
+	u.rw.RUnlock()
+	if lastBatch == nil {
 		return nil
 	}
-	lastBatchNum := u.state.Network.LastBatch.BatchNum
+	lastBatchNum := lastBatch.BatchNum
 	metrics, err := u.hdb.GetMetricsInternalAPI(lastBatchNum)
 	if err != nil {
 		return tracerr.Wrap(err)
 	}
+	u.rw.Lock()
 	u.state.Metrics = *metrics
+	u.rw.Unlock()
 	return nil
 }
 
-func (u *APIStateUpdater) UpdateNetworkInfoBlock(lastEthBlock, lastSyncBlock common.Block) {
+// UpdateNetworkInfoBlock update Status.Network block related information
+func (u *StateAPIUpdater) UpdateNetworkInfoBlock(lastEthBlock, lastSyncBlock common.Block) {
+	u.rw.Lock()
 	u.state.Network.LastSyncBlock = lastSyncBlock.Num
 	u.state.Network.LastEthBlock = lastEthBlock.Num
+	u.rw.Unlock()
 }
 
-func (u *APIStateUpdater) UpdateNetworkInfo(
+// UpdateNetworkInfo update Status.Network information
+func (u *StateAPIUpdater) UpdateNetworkInfo(
 	lastEthBlock, lastSyncBlock common.Block,
 	lastBatchNum common.BatchNum, currentSlot int64,
 ) error {
@@ -88,9 +120,12 @@ func (u *APIStateUpdater) UpdateNetworkInfo(
 	} else if err != nil {
 		return tracerr.Wrap(err)
 	}
+	u.rw.RLock()
+	auctionVars := u.vars.Auction
+	u.rw.RUnlock()
 	// Get next forgers
-	lastClosedSlot := currentSlot + int64(u.state.Auction.ClosedAuctionSlots)
-	nextForgers, err := u.hdb.GetNextForgersInternalAPI(u.vars.Auction, &u.consts.Auction,
+	lastClosedSlot := currentSlot + int64(auctionVars.ClosedAuctionSlots)
+	nextForgers, err := u.hdb.GetNextForgersInternalAPI(auctionVars, &u.consts.Auction,
 		lastSyncBlock, currentSlot, lastClosedSlot)
 	if tracerr.Unwrap(err) == sql.ErrNoRows {
 		nextForgers = nil
@@ -104,6 +139,8 @@ func (u *APIStateUpdater) UpdateNetworkInfo(
 	} else if err != nil {
 		return tracerr.Wrap(err)
 	}
+
+	u.rw.Lock()
 	// Update NodeInfo struct
 	for i, bucketParams := range u.state.Rollup.Buckets {
 		for _, bucketUpdate := range bucketUpdates {
@@ -119,5 +156,6 @@ func (u *APIStateUpdater) UpdateNetworkInfo(
 	u.state.Network.LastBatch = lastBatch
 	u.state.Network.CurrentSlot = currentSlot
 	u.state.Network.NextForgers = nextForgers
+	u.rw.Unlock()
 	return nil
 }

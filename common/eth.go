@@ -7,6 +7,8 @@ type SCVariables struct {
 	WDelayer WDelayerVariables `validate:"required"`
 }
 
+// AsPtr returns the SCVariables as a SCVariablesPtr using pointers to the
+// original SCVariables
 func (v *SCVariables) AsPtr() *SCVariablesPtr {
 	return &SCVariablesPtr{
 		Rollup:   &v.Rollup,

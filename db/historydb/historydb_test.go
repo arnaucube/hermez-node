@@ -1172,15 +1172,6 @@ func TestGetMetricsAPI(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	// clientSetupExample := test.NewClientSetupExample()
-	// apiStateUpdater := NewAPIStateUpdater(historyDB, &NodeConfig{1000, 0.5},
-	// 	&Constants{
-	// 		RollupConstants:   *clientSetupExample.RollupConstants,
-	// 		AuctionConstants:  *clientSetupExample.AuctionConstants,
-	// 		WDelayerConstants: *clientSetupExample.WDelayerConstants,
-	// 		ChainID:           uint16(clientSetupExample.ChainID.Int64()),
-	// 		HermezAddress:     clientSetupExample.AuctionConstants.HermezRollup,
-	// 	})
 	res, err := historyDB.GetMetricsInternalAPI(common.BatchNum(numBatches))
 	assert.NoError(t, err)
 
@@ -1467,7 +1458,7 @@ func setTestBlocks(from, to int64) []common.Block {
 func TestNodeInfo(t *testing.T) {
 	test.WipeDB(historyDB.DB())
 
-	err := historyDB.SetAPIState(&StateAPI{})
+	err := historyDB.SetStateInternalAPI(&StateAPI{})
 	require.NoError(t, err)
 
 	clientSetup := test.NewClientSetupExample()
@@ -1503,7 +1494,7 @@ func TestNodeInfo(t *testing.T) {
 			ExistingAccount: 0.15,
 		},
 	}
-	err = historyDB.SetAPIState(stateAPI)
+	err = historyDB.SetStateInternalAPI(stateAPI)
 	require.NoError(t, err)
 
 	nodeConfig := &NodeConfig{
@@ -1521,7 +1512,7 @@ func TestNodeInfo(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, nodeConfig, dbNodeConfig)
 
-	dbStateAPI, err := historyDB.GetStateAPI()
+	dbStateAPI, err := historyDB.getStateAPI(historyDB.dbRead)
 	require.NoError(t, err)
 	assert.Equal(t, stateAPI, dbStateAPI)
 }

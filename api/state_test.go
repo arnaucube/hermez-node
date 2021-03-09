@@ -29,10 +29,11 @@ type testNetwork struct {
 }
 
 func TestSetRollupVariables(t *testing.T) {
-	api.h.SetRollupVariables(&tc.rollupVars)
+	stateAPIUpdater.SetSCVars(&common.SCVariablesPtr{Rollup: &tc.rollupVars})
+	require.NoError(t, stateAPIUpdater.Store())
 	ni, err := api.h.GetNodeInfoAPI()
-	assert.NoError(t, err)
-	assertEqualRollupVariables(t, tc.rollupVars, ni.APIState.Rollup, true)
+	require.NoError(t, err)
+	assertEqualRollupVariables(t, tc.rollupVars, ni.StateAPI.Rollup, true)
 }
 
 func assertEqualRollupVariables(t *testing.T, rollupVariables common.RollupVariables, apiVariables historydb.RollupVariablesAPI, checkBuckets bool) {
@@ -51,17 +52,19 @@ func assertEqualRollupVariables(t *testing.T, rollupVariables common.RollupVaria
 }
 
 func TestSetWDelayerVariables(t *testing.T) {
-	api.h.SetWDelayerVariables(&tc.wdelayerVars)
+	stateAPIUpdater.SetSCVars(&common.SCVariablesPtr{WDelayer: &tc.wdelayerVars})
+	require.NoError(t, stateAPIUpdater.Store())
 	ni, err := api.h.GetNodeInfoAPI()
-	assert.NoError(t, err)
-	assert.Equal(t, tc.wdelayerVars, ni.APIState.WithdrawalDelayer)
+	require.NoError(t, err)
+	assert.Equal(t, tc.wdelayerVars, ni.StateAPI.WithdrawalDelayer)
 }
 
 func TestSetAuctionVariables(t *testing.T) {
-	api.h.SetAuctionVariables(&tc.auctionVars)
+	stateAPIUpdater.SetSCVars(&common.SCVariablesPtr{Auction: &tc.auctionVars})
+	require.NoError(t, stateAPIUpdater.Store())
 	ni, err := api.h.GetNodeInfoAPI()
-	assert.NoError(t, err)
-	assertEqualAuctionVariables(t, tc.auctionVars, ni.APIState.Auction)
+	require.NoError(t, err)
+	assertEqualAuctionVariables(t, tc.auctionVars, ni.StateAPI.Auction)
 }
 
 func assertEqualAuctionVariables(t *testing.T, auctionVariables common.AuctionVariables, apiVariables historydb.AuctionVariablesAPI) {
@@ -113,16 +116,18 @@ func TestUpdateNetworkInfo(t *testing.T) {
 	err := api.h.AddBucketUpdatesTest(api.h.DB(), bucketUpdates)
 	require.NoError(t, err)
 
-	err = api.h.UpdateNetworkInfo(lastBlock, lastBlock, lastBatchNum, currentSlotNum)
-	assert.NoError(t, err)
+	// stateAPIUpdater := NewStateAPIUpdater(hdb)
+	err = stateAPIUpdater.UpdateNetworkInfo(lastBlock, lastBlock, lastBatchNum, currentSlotNum)
+	require.NoError(t, err)
+	require.NoError(t, stateAPIUpdater.Store())
 	ni, err := api.h.GetNodeInfoAPI()
-	assert.NoError(t, err)
-	assert.Equal(t, lastBlock.Num, ni.APIState.Network.LastSyncBlock)
-	assert.Equal(t, lastBatchNum, ni.APIState.Network.LastBatch.BatchNum)
-	assert.Equal(t, currentSlotNum, ni.APIState.Network.CurrentSlot)
-	assert.Equal(t, int(ni.APIState.Auction.ClosedAuctionSlots)+1, len(ni.APIState.Network.NextForgers))
-	assert.Equal(t, ni.APIState.Rollup.Buckets[0].Withdrawals, apitypes.NewBigIntStr(big.NewInt(123)))
-	assert.Equal(t, ni.APIState.Rollup.Buckets[2].Withdrawals, apitypes.NewBigIntStr(big.NewInt(43)))
+	require.NoError(t, err)
+	assert.Equal(t, lastBlock.Num, ni.StateAPI.Network.LastSyncBlock)
+	assert.Equal(t, lastBatchNum, ni.StateAPI.Network.LastBatch.BatchNum)
+	assert.Equal(t, currentSlotNum, ni.StateAPI.Network.CurrentSlot)
+	assert.Equal(t, int(ni.StateAPI.Auction.ClosedAuctionSlots)+1, len(ni.StateAPI.Network.NextForgers))
+	assert.Equal(t, ni.StateAPI.Rollup.Buckets[0].Withdrawals, apitypes.NewBigIntStr(big.NewInt(123)))
+	assert.Equal(t, ni.StateAPI.Rollup.Buckets[2].Withdrawals, apitypes.NewBigIntStr(big.NewInt(43)))
 }
 
 func TestUpdateMetrics(t *testing.T) {
@@ -130,31 +135,33 @@ func TestUpdateMetrics(t *testing.T) {
 	lastBlock := tc.blocks[3]
 	lastBatchNum := common.BatchNum(12)
 	currentSlotNum := int64(1)
-	err := api.h.UpdateNetworkInfo(lastBlock, lastBlock, lastBatchNum, currentSlotNum)
-	assert.NoError(t, err)
+	err := stateAPIUpdater.UpdateNetworkInfo(lastBlock, lastBlock, lastBatchNum, currentSlotNum)
+	require.NoError(t, err)
 
-	err = api.h.UpdateMetrics()
-	assert.NoError(t, err)
+	err = stateAPIUpdater.UpdateMetrics()
+	require.NoError(t, err)
+	require.NoError(t, stateAPIUpdater.Store())
 	ni, err := api.h.GetNodeInfoAPI()
-	assert.NoError(t, err)
-	assert.Greater(t, ni.APIState.Metrics.TransactionsPerBatch, float64(0))
-	assert.Greater(t, ni.APIState.Metrics.BatchFrequency, float64(0))
-	assert.Greater(t, ni.APIState.Metrics.TransactionsPerSecond, float64(0))
-	assert.Greater(t, ni.APIState.Metrics.TotalAccounts, int64(0))
-	assert.Greater(t, ni.APIState.Metrics.TotalBJJs, int64(0))
-	assert.Greater(t, ni.APIState.Metrics.AvgTransactionFee, float64(0))
+	require.NoError(t, err)
+	assert.Greater(t, ni.StateAPI.Metrics.TransactionsPerBatch, float64(0))
+	assert.Greater(t, ni.StateAPI.Metrics.BatchFrequency, float64(0))
+	assert.Greater(t, ni.StateAPI.Metrics.TransactionsPerSecond, float64(0))
+	assert.Greater(t, ni.StateAPI.Metrics.TotalAccounts, int64(0))
+	assert.Greater(t, ni.StateAPI.Metrics.TotalBJJs, int64(0))
+	assert.Greater(t, ni.StateAPI.Metrics.AvgTransactionFee, float64(0))
 }
 
 func TestUpdateRecommendedFee(t *testing.T) {
-	err := api.h.UpdateRecommendedFee()
-	assert.NoError(t, err)
+	err := stateAPIUpdater.UpdateRecommendedFee()
+	require.NoError(t, err)
+	require.NoError(t, stateAPIUpdater.Store())
 	var minFeeUSD float64
 	if api.l2 != nil {
 		minFeeUSD = api.l2.MinFeeUSD()
 	}
 	ni, err := api.h.GetNodeInfoAPI()
-	assert.NoError(t, err)
-	assert.Greater(t, ni.APIState.RecommendedFee.ExistingAccount, minFeeUSD)
+	require.NoError(t, err)
+	assert.Greater(t, ni.StateAPI.RecommendedFee.ExistingAccount, minFeeUSD)
 	// assert.Equal(t, ni.StateAPI.RecommendedFee.CreatesAccount,
 	// 	ni.StateAPI.RecommendedFee.ExistingAccount*createAccountExtraFeePercentage)
 	// assert.Equal(t, ni.StateAPI.RecommendedFee.CreatesAccountAndRegister,
@@ -165,20 +172,23 @@ func TestGetState(t *testing.T) {
 	lastBlock := tc.blocks[3]
 	lastBatchNum := common.BatchNum(12)
 	currentSlotNum := int64(1)
-	api.h.SetRollupVariables(&tc.rollupVars)
-	api.h.SetWDelayerVariables(&tc.wdelayerVars)
-	api.h.SetAuctionVariables(&tc.auctionVars)
-	err := api.h.UpdateNetworkInfo(lastBlock, lastBlock, lastBatchNum, currentSlotNum)
-	assert.NoError(t, err)
-	err = api.h.UpdateMetrics()
-	assert.NoError(t, err)
-	err = api.h.UpdateRecommendedFee()
-	assert.NoError(t, err)
+	stateAPIUpdater.SetSCVars(&common.SCVariablesPtr{
+		Rollup:   &tc.rollupVars,
+		Auction:  &tc.auctionVars,
+		WDelayer: &tc.wdelayerVars,
+	})
+	err := stateAPIUpdater.UpdateNetworkInfo(lastBlock, lastBlock, lastBatchNum, currentSlotNum)
+	require.NoError(t, err)
+	err = stateAPIUpdater.UpdateMetrics()
+	require.NoError(t, err)
+	err = stateAPIUpdater.UpdateRecommendedFee()
+	require.NoError(t, err)
+	require.NoError(t, stateAPIUpdater.Store())
 
 	endpoint := apiURL + "state"
 	var status testStatus
 
-	assert.NoError(t, doGoodReq("GET", endpoint, nil, &status))
+	require.NoError(t, doGoodReq("GET", endpoint, nil, &status))
 
 	// SC vars
 	// UpdateNetworkInfo will overwrite buckets withdrawal values

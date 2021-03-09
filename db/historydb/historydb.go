@@ -1171,7 +1171,7 @@ func (hdb *HistoryDB) GetTokensTest() ([]TokenWithUSD, error) {
 	return db.SlicePtrsToSlice(tokens).([]TokenWithUSD), nil
 }
 
-// UpdateRecommendedFee update Status.RecommendedFee information
+// GetRecommendedFee returns the RecommendedFee information
 func (hdb *HistoryDB) GetRecommendedFee(minFeeUSD float64) (*common.RecommendedFee, error) {
 	var recommendedFee common.RecommendedFee
 	// Get total txs and the batch of the first selected tx of the last hour

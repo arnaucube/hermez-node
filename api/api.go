@@ -34,20 +34,20 @@ func NewAPI(
 	if explorerEndpoints && hdb == nil {
 		return nil, tracerr.Wrap(errors.New("cannot serve Explorer endpoints without HistoryDB"))
 	}
-	ni, err := hdb.GetNodeInfo()
+	consts, err := hdb.GetConstants()
 	if err != nil {
 		return nil, err
 	}
 	a := &API{
 		h: hdb,
 		cg: &configAPI{
-			RollupConstants:   *newRollupConstants(ni.Constants.RollupConstants),
-			AuctionConstants:  ni.Constants.AuctionConstants,
-			WDelayerConstants: ni.Constants.WDelayerConstants,
+			RollupConstants:   *newRollupConstants(consts.Rollup),
+			AuctionConstants:  consts.Auction,
+			WDelayerConstants: consts.WDelayer,
 		},
 		l2:            l2db,
-		chainID:       ni.Constants.ChainID,
-		hermezAddress: ni.Constants.HermezAddress,
+		chainID:       consts.ChainID,
+		hermezAddress: consts.HermezAddress,
 	}
 
 	// Add coordinator endpoints

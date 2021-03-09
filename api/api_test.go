@@ -186,6 +186,7 @@ type testCommon struct {
 var tc testCommon
 var config configAPI
 var api *API
+var stateAPIUpdater *StateAPIUpdater
 
 // TestMain initializes the API server, and fill HistoryDB and StateDB with fake data,
 // emulating the task of the synchronizer in order to have data to be returned
@@ -222,15 +223,27 @@ func TestMain(m *testing.M) {
 	apiGin := gin.Default()
 	// Reset DB
 	test.WipeDB(hdb.DB())
-	if err := hdb.SetInitialNodeInfo(10, 0.0, &historydb.Constants{
-		RollupConstants:   _config.RollupConstants,
-		AuctionConstants:  _config.AuctionConstants,
-		WDelayerConstants: _config.WDelayerConstants,
-		ChainID:           chainID,
-		HermezAddress:     _config.HermezAddress,
-	}); err != nil {
+
+	constants := &historydb.Constants{
+		SCConsts: common.SCConsts{
+			Rollup:   _config.RollupConstants,
+			Auction:  _config.AuctionConstants,
+			WDelayer: _config.WDelayerConstants,
+		},
+		ChainID:       chainID,
+		HermezAddress: _config.HermezAddress,
+	}
+	if err := hdb.SetConstants(constants); err != nil {
 		panic(err)
 	}
+	nodeConfig := &historydb.NodeConfig{
+		MaxPoolTxs: 10,
+		MinFeeUSD:  0,
+	}
+	if err := hdb.SetNodeConfig(nodeConfig); err != nil {
+		panic(err)
+	}
+
 	api, err = NewAPI(
 		true,
 		true,
@@ -506,6 +519,12 @@ func TestMain(m *testing.M) {
 	wdelayerVars := common.WDelayerVariables{
 		WithdrawalDelay: uint64(3000),
 	}
+
+	stateAPIUpdater = NewStateAPIUpdater(hdb, nodeConfig, &common.SCVariables{
+		Rollup:   rollupVars,
+		Auction:  auctionVars,
+		WDelayer: wdelayerVars,
+	}, constants)
 
 	// Generate test data, as expected to be received/sended from/to the API
 	testCoords := genTestCoordinators(commonCoords)

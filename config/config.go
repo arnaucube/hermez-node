@@ -219,28 +219,9 @@ type Coordinator struct {
 	}
 }
 
-// NodeAPI specifies the configuration parameters of the API
-type NodeAPI struct {
-	// Address where the API will listen if set
-	Address string
-	// Explorer enables the Explorer API endpoints
-	Explorer bool
-	// UpdateMetricsInterval is the interval between updates of the
-	// API metrics
-	UpdateMetricsInterval Duration
-	// UpdateRecommendedFeeInterval is the interval between updates of the
-	// recommended fees
-	UpdateRecommendedFeeInterval Duration
-	// Maximum concurrent connections allowed between API and SQL
-	MaxSQLConnections int `validate:"required"`
-	// SQLConnectionTimeout is the maximum amount of time that an API request
-	// can wait to stablish a SQL connection
-	SQLConnectionTimeout Duration
-}
-
-// It's possible to use diferentiated SQL connections for read/write.
-// If the read configuration is not provided, the write one it's going to be used
-// for both reads and writes
+// PostgreSQL is the postgreSQL configuration parameters.  It's possible to use
+// diferentiated SQL connections for read/write.  If the read configuration is
+// not provided, the write one it's going to be used for both reads and writes
 type PostgreSQL struct {
 	// Port of the PostgreSQL write server
 	PortWrite int `validate:"required"`
@@ -324,31 +305,60 @@ type Node struct {
 		// TokenHEZ address
 		TokenHEZName string `validate:"required"`
 	} `validate:"required"`
-	API         NodeAPI     `validate:"required"`
+	// API specifies the configuration parameters of the API
+	API struct {
+		// Address where the API will listen if set
+		Address string
+		// Explorer enables the Explorer API endpoints
+		Explorer bool
+		// UpdateMetricsInterval is the interval between updates of the
+		// API metrics
+		UpdateMetricsInterval Duration
+		// UpdateRecommendedFeeInterval is the interval between updates of the
+		// recommended fees
+		UpdateRecommendedFeeInterval Duration
+		// Maximum concurrent connections allowed between API and SQL
+		MaxSQLConnections int `validate:"required"`
+		// SQLConnectionTimeout is the maximum amount of time that an API request
+		// can wait to stablish a SQL connection
+		SQLConnectionTimeout Duration
+	} `validate:"required"`
 	Debug       NodeDebug   `validate:"required"`
 	Coordinator Coordinator `validate:"-"`
 }
 
+// APIServer is the api server configuration parameters
 type APIServer struct {
-	API         NodeAPI    `validate:"required"`
+	// NodeAPI specifies the configuration parameters of the API
+	API struct {
+		// Address where the API will listen if set
+		Address string `validate:"required"`
+		// Explorer enables the Explorer API endpoints
+		Explorer bool
+		// Maximum concurrent connections allowed between API and SQL
+		MaxSQLConnections int `validate:"required"`
+		// SQLConnectionTimeout is the maximum amount of time that an API request
+		// can wait to stablish a SQL connection
+		SQLConnectionTimeout Duration
+	} `validate:"required"`
 	PostgreSQL  PostgreSQL `validate:"required"`
 	Coordinator struct {
 		API struct {
 			// Coordinator enables the coordinator API endpoints
 			Coordinator bool
 		} `validate:"required"`
-	} `validate:"required"`
-	L2DB struct {
-		// MaxTxs is the maximum number of pending L2Txs that can be
-		// stored in the pool.  Once this number of pending L2Txs is
-		// reached, inserts to the pool will be denied until some of
-		// the pending txs are forged.
-		MaxTxs uint32 `validate:"required"`
-		// MinFeeUSD is the minimum fee in USD that a tx must pay in
-		// order to be accepted into the pool.  Txs with lower than
-		// minimum fee will be rejected at the API level.
-		MinFeeUSD float64
-	} `validate:"required"`
+		L2DB struct {
+			// MaxTxs is the maximum number of pending L2Txs that can be
+			// stored in the pool.  Once this number of pending L2Txs is
+			// reached, inserts to the pool will be denied until some of
+			// the pending txs are forged.
+			MaxTxs uint32 `validate:"required"`
+			// MinFeeUSD is the minimum fee in USD that a tx must pay in
+			// order to be accepted into the pool.  Txs with lower than
+			// minimum fee will be rejected at the API level.
+			MinFeeUSD float64
+		} `validate:"required"`
+	}
 	Debug NodeDebug `validate:"required"`
 }
 
@@ -365,24 +375,8 @@ func Load(path string, cfg interface{}) error {
 	return nil
 }
 
-// LoadCoordinator loads the Coordinator configuration from path.
-func LoadCoordinator(path string) (*Node, error) {
-	var cfg Node
-	if err := Load(path, &cfg); err != nil {
-		return nil, tracerr.Wrap(fmt.Errorf("error loading node configuration file: %w", err))
-	}
-	validate := validator.New()
-	if err := validate.Struct(cfg); err != nil {
-		return nil, tracerr.Wrap(fmt.Errorf("error validating configuration file: %w", err))
-	}
-	if err := validate.Struct(cfg.Coordinator); err != nil {
-		return nil, tracerr.Wrap(fmt.Errorf("error validating configuration file: %w", err))
-	}
-	return &cfg, nil
-}
-
 // LoadNode loads the Node configuration from path.
-func LoadNode(path string) (*Node, error) {
+func LoadNode(path string, coordinator bool) (*Node, error) {
 	var cfg Node
 	if err := Load(path, &cfg); err != nil {
 		return nil, tracerr.Wrap(fmt.Errorf("error loading node configuration file: %w", err))
@@ -390,12 +384,17 @@ func LoadNode(path string) (*Node, error) {
 	validate := validator.New()
 	if err := validate.Struct(cfg); err != nil {
 		return nil, tracerr.Wrap(fmt.Errorf("error validating configuration file: %w", err))
+	}
+	if coordinator {
+		if err := validate.Struct(cfg.Coordinator); err != nil {
+			return nil, tracerr.Wrap(fmt.Errorf("error validating configuration file: %w", err))
+		}
 	}
 	return &cfg, nil
 }
 
 // LoadAPIServer loads the APIServer configuration from path.
-func LoadAPIServer(path string) (*APIServer, error) {
+func LoadAPIServer(path string, coordinator bool) (*APIServer, error) {
 	var cfg APIServer
 	if err := Load(path, &cfg); err != nil {
 		return nil, tracerr.Wrap(fmt.Errorf("error loading apiServer configuration file: %w", err))
@@ -403,6 +402,11 @@ func LoadAPIServer(path string) (*APIServer, error) {
 	validate := validator.New()
 	if err := validate.Struct(cfg); err != nil {
 		return nil, tracerr.Wrap(fmt.Errorf("error validating configuration file: %w", err))
+	}
+	if coordinator {
+		if err := validate.Struct(cfg.Coordinator); err != nil {
+			return nil, tracerr.Wrap(fmt.Errorf("error validating configuration file: %w", err))
+		}
 	}
 	return &cfg, nil
 }

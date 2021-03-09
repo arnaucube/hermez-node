@@ -54,7 +54,7 @@ const (
 // Node is the Hermez Node
 type Node struct {
 	nodeAPI         *NodeAPI
-	apiStateUpdater *api.APIStateUpdater
+	stateAPIUpdater *api.StateAPIUpdater
 	debugAPI        *debugapi.DebugAPI
 	priceUpdater    *priceupdater.PriceUpdater
 	// Coordinator
@@ -257,7 +257,7 @@ func NewNode(mode Mode, cfg *config.Node) (*Node, error) {
 		return nil, tracerr.Wrap(err)
 	}
 
-	apiStateUpdater := api.NewAPIStateUpdater(historyDB, &hdbNodeCfg, initSCVars, &hdbConsts)
+	stateAPIUpdater := api.NewStateAPIUpdater(historyDB, &hdbNodeCfg, initSCVars, &hdbConsts)
 
 	var coord *coordinator.Coordinator
 	var l2DB *l2db.L2DB
@@ -437,7 +437,7 @@ func NewNode(mode Mode, cfg *config.Node) (*Node, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Node{
-		apiStateUpdater: apiStateUpdater,
+		stateAPIUpdater: stateAPIUpdater,
 		nodeAPI:         nodeAPI,
 		debugAPI:        debugAPI,
 		priceUpdater:    priceUpdater,
@@ -456,11 +456,14 @@ func NewNode(mode Mode, cfg *config.Node) (*Node, error) {
 // APIServer is a server that only runs the API
 type APIServer struct {
 	nodeAPI *NodeAPI
+	mode    Mode
+	ctx     context.Context
+	wg      sync.WaitGroup
+	cancel  context.CancelFunc
 }
 
+// NewAPIServer creates a new APIServer
 func NewAPIServer(mode Mode, cfg *config.APIServer) (*APIServer, error) {
-	// NOTE: I just copied some parts of NewNode related to starting the
-	// API, but it still cotains many parameters that are not available
 	meddler.Debug = cfg.Debug.MeddlerLogs
 	// Stablish DB connection
 	dbWrite, err := dbUtils.InitSQLDB(
@@ -492,13 +495,10 @@ func NewAPIServer(mode Mode, cfg *config.APIServer) (*APIServer, error) {
 			return nil, tracerr.Wrap(fmt.Errorf("dbUtils.InitSQLDB: %w", err))
 		}
 	}
-	var apiConnCon *dbUtils.APIConnectionController
-	if cfg.API.Explorer || mode == ModeCoordinator {
-		apiConnCon = dbUtils.NewAPICnnectionController(
-			cfg.API.MaxSQLConnections,
-			cfg.API.SQLConnectionTimeout.Duration,
-		)
-	}
+	apiConnCon := dbUtils.NewAPICnnectionController(
+		cfg.API.MaxSQLConnections,
+		cfg.API.SQLConnectionTimeout.Duration,
+	)
 
 	historyDB := historydb.NewHistoryDB(dbRead, dbWrite, apiConnCon)
 
@@ -506,47 +506,67 @@ func NewAPIServer(mode Mode, cfg *config.APIServer) (*APIServer, error) {
 	if mode == ModeCoordinator {
 		l2DB = l2db.NewL2DB(
 			dbRead, dbWrite,
-			cfg.Coordinator.L2DB.SafetyPeriod,
+			0,
 			cfg.Coordinator.L2DB.MaxTxs,
 			cfg.Coordinator.L2DB.MinFeeUSD,
-			cfg.Coordinator.L2DB.TTL.Duration,
+			0,
 			apiConnCon,
 		)
 	}
 
-	var nodeAPI *NodeAPI
-	if cfg.API.Address != "" {
-		if cfg.Debug.GinDebugMode {
-			gin.SetMode(gin.DebugMode)
-		} else {
-			gin.SetMode(gin.ReleaseMode)
-		}
-		if cfg.API.UpdateMetricsInterval.Duration == 0 {
-			return nil, tracerr.Wrap(fmt.Errorf("invalid cfg.API.UpdateMetricsInterval: %v",
-				cfg.API.UpdateMetricsInterval.Duration))
-		}
-		if cfg.API.UpdateRecommendedFeeInterval.Duration == 0 {
-			return nil, tracerr.Wrap(fmt.Errorf("invalid cfg.API.UpdateRecommendedFeeInterval: %v",
-				cfg.API.UpdateRecommendedFeeInterval.Duration))
-		}
-		server := gin.Default()
-		coord := false
-		if mode == ModeCoordinator {
-			coord = cfg.Coordinator.API.Coordinator
-		}
-		var err error
-		nodeAPI, err = NewNodeAPI(
-			cfg.API.Address,
-			coord, cfg.API.Explorer,
-			server,
-			historyDB,
-			l2DB,
-		)
-		if err != nil {
-			return nil, tracerr.Wrap(err)
-		}
+	if cfg.Debug.GinDebugMode {
+		gin.SetMode(gin.DebugMode)
+	} else {
+		gin.SetMode(gin.ReleaseMode)
 	}
-	// ETC...
+	server := gin.Default()
+	coord := false
+	if mode == ModeCoordinator {
+		coord = cfg.Coordinator.API.Coordinator
+	}
+	nodeAPI, err := NewNodeAPI(
+		cfg.API.Address,
+		coord, cfg.API.Explorer,
+		server,
+		historyDB,
+		l2DB,
+	)
+	if err != nil {
+		return nil, tracerr.Wrap(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &APIServer{
+		nodeAPI: nodeAPI,
+		mode:    mode,
+		ctx:     ctx,
+		cancel:  cancel,
+	}, nil
+}
+
+// Start the APIServer
+func (s *APIServer) Start() {
+	log.Infow("Starting api server...", "mode", s.mode)
+	log.Info("Starting NodeAPI...")
+	s.wg.Add(1)
+	go func() {
+		defer func() {
+			log.Info("NodeAPI routine stopped")
+			s.wg.Done()
+		}()
+		if err := s.nodeAPI.Run(s.ctx); err != nil {
+			if s.ctx.Err() != nil {
+				return
+			}
+			log.Fatalw("NodeAPI.Run", "err", err)
+		}
+	}()
+}
+
+// Stop the APIServer
+func (s *APIServer) Stop() {
+	log.Infow("Stopping NodeAPI...")
+	s.cancel()
+	s.wg.Wait()
 }
 
 // NodeAPI holds the node http API
@@ -627,13 +647,13 @@ func (n *Node) handleNewBlock(ctx context.Context, stats *synchronizer.Stats, va
 	if n.mode == ModeCoordinator {
 		n.coord.SendMsg(ctx, coordinator.MsgSyncBlock{
 			Stats:   *stats,
-			Vars:    vars,
+			Vars:    *vars,
 			Batches: batches,
 		})
 	}
-	n.apiStateUpdater.SetSCVars(vars)
+	n.stateAPIUpdater.SetSCVars(vars)
 	if stats.Synced() {
-		if err := n.apiStateUpdater.UpdateNetworkInfo(
+		if err := n.stateAPIUpdater.UpdateNetworkInfo(
 			stats.Eth.LastBlock, stats.Sync.LastBlock,
 			common.BatchNum(stats.Eth.LastBatchNum),
 			stats.Sync.Auction.CurrentSlot.SlotNum,
@@ -641,11 +661,11 @@ func (n *Node) handleNewBlock(ctx context.Context, stats *synchronizer.Stats, va
 			log.Errorw("ApiStateUpdater.UpdateNetworkInfo", "err", err)
 		}
 	} else {
-		n.apiStateUpdater.UpdateNetworkInfoBlock(
+		n.stateAPIUpdater.UpdateNetworkInfoBlock(
 			stats.Eth.LastBlock, stats.Sync.LastBlock,
 		)
 	}
-	if err := n.apiStateUpdater.Store(); err != nil {
+	if err := n.stateAPIUpdater.Store(); err != nil {
 		return tracerr.Wrap(err)
 	}
 	return nil
@@ -656,14 +676,14 @@ func (n *Node) handleReorg(ctx context.Context, stats *synchronizer.Stats,
 	if n.mode == ModeCoordinator {
 		n.coord.SendMsg(ctx, coordinator.MsgSyncReorg{
 			Stats: *stats,
-			Vars:  vars,
+			Vars:  *vars.AsPtr(),
 		})
 	}
-	n.apiStateUpdater.SetSCVars(vars.AsPtr())
-	n.apiStateUpdater.UpdateNetworkInfoBlock(
+	n.stateAPIUpdater.SetSCVars(vars.AsPtr())
+	n.stateAPIUpdater.UpdateNetworkInfoBlock(
 		stats.Eth.LastBlock, stats.Sync.LastBlock,
 	)
-	if err := n.apiStateUpdater.Store(); err != nil {
+	if err := n.stateAPIUpdater.Store(); err != nil {
 		return tracerr.Wrap(err)
 	}
 	return nil
@@ -713,7 +733,9 @@ func (n *Node) StartSynchronizer() {
 	// the last synced one) is synchronized
 	stats := n.sync.Stats()
 	vars := n.sync.SCVars()
-	n.handleNewBlock(n.ctx, stats, vars.AsPtr(), []common.BatchData{})
+	if err := n.handleNewBlock(n.ctx, stats, vars.AsPtr(), []common.BatchData{}); err != nil {
+		log.Fatalw("Node.handleNewBlock", "err", err)
+	}
 
 	n.wg.Add(1)
 	go func() {
@@ -800,24 +822,24 @@ func (n *Node) StartNodeAPI() {
 	n.wg.Add(1)
 	go func() {
 		// Do an initial update on startup
-		if err := n.apiStateUpdater.UpdateMetrics(); err != nil {
+		if err := n.stateAPIUpdater.UpdateMetrics(); err != nil {
 			log.Errorw("ApiStateUpdater.UpdateMetrics", "err", err)
 		}
-		if err := n.apiStateUpdater.Store(); err != nil {
+		if err := n.stateAPIUpdater.Store(); err != nil {
 			log.Errorw("ApiStateUpdater.Store", "err", err)
 		}
 		for {
 			select {
 			case <-n.ctx.Done():
-				log.Info("API.UpdateMetrics loop done")
+				log.Info("ApiStateUpdater.UpdateMetrics loop done")
 				n.wg.Done()
 				return
 			case <-time.After(n.cfg.API.UpdateMetricsInterval.Duration):
-				if err := n.apiStateUpdater.UpdateMetrics(); err != nil {
+				if err := n.stateAPIUpdater.UpdateMetrics(); err != nil {
 					log.Errorw("ApiStateUpdater.UpdateMetrics", "err", err)
 					continue
 				}
-				if err := n.apiStateUpdater.Store(); err != nil {
+				if err := n.stateAPIUpdater.Store(); err != nil {
 					log.Errorw("ApiStateUpdater.Store", "err", err)
 				}
 			}
@@ -827,18 +849,25 @@ func (n *Node) StartNodeAPI() {
 	n.wg.Add(1)
 	go func() {
 		// Do an initial update on startup
-		if err := n.historyDB.UpdateRecommendedFee(); err != nil {
-			log.Errorw("API.UpdateRecommendedFee", "err", err)
+		if err := n.stateAPIUpdater.UpdateRecommendedFee(); err != nil {
+			log.Errorw("ApiStateUpdater.UpdateRecommendedFee", "err", err)
+		}
+		if err := n.stateAPIUpdater.Store(); err != nil {
+			log.Errorw("ApiStateUpdater.Store", "err", err)
 		}
 		for {
 			select {
 			case <-n.ctx.Done():
-				log.Info("API.UpdateRecommendedFee loop done")
+				log.Info("ApiStateUpdaterAPI.UpdateRecommendedFee loop done")
 				n.wg.Done()
 				return
 			case <-time.After(n.cfg.API.UpdateRecommendedFeeInterval.Duration):
-				if err := n.historyDB.UpdateRecommendedFee(); err != nil {
-					log.Errorw("API.UpdateRecommendedFee", "err", err)
+				if err := n.stateAPIUpdater.UpdateRecommendedFee(); err != nil {
+					log.Errorw("ApiStateUpdaterAPI.UpdateRecommendedFee", "err", err)
+					continue
+				}
+				if err := n.stateAPIUpdater.Store(); err != nil {
+					log.Errorw("ApiStateUpdater.Store", "err", err)
 				}
 			}
 		}

@@ -38,7 +38,7 @@ func (hdb *HistoryDB) GetBatchAPI(batchNum common.BatchNum) (*BatchAPI, error) {
 	return hdb.getBatchAPI(hdb.dbRead, batchNum)
 }
 
-// GetBatchAPI return the batch with the given batchNum
+// GetBatchInternalAPI return the batch with the given batchNum
 func (hdb *HistoryDB) GetBatchInternalAPI(batchNum common.BatchNum) (*BatchAPI, error) {
 	return hdb.getBatchAPI(hdb.dbRead, batchNum)
 }
@@ -944,6 +944,7 @@ func (hdb *HistoryDB) GetCoordinatorAPI(bidderAddr ethCommon.Address) (*Coordina
 	defer hdb.apiConnCon.Release()
 	return hdb.getCoordinatorAPI(hdb.dbRead, bidderAddr)
 }
+
 func (hdb *HistoryDB) getCoordinatorAPI(d meddler.DB, bidderAddr ethCommon.Address) (*CoordinatorAPI, error) {
 	coordinator := &CoordinatorAPI{}
 	err := meddler.QueryRow(
@@ -954,6 +955,7 @@ func (hdb *HistoryDB) getCoordinatorAPI(d meddler.DB, bidderAddr ethCommon.Addre
 	return coordinator, tracerr.Wrap(err)
 }
 
+// GetNodeInfoAPI retusnt he NodeInfo
 func (hdb *HistoryDB) GetNodeInfoAPI() (*NodeInfo, error) {
 	cancel, err := hdb.apiConnCon.Acquire()
 	defer cancel()
@@ -964,9 +966,9 @@ func (hdb *HistoryDB) GetNodeInfoAPI() (*NodeInfo, error) {
 	return hdb.GetNodeInfo()
 }
 
+// GetBucketUpdatesInternalAPI returns the latest bucket updates
 func (hdb *HistoryDB) GetBucketUpdatesInternalAPI() ([]BucketUpdateAPI, error) {
 	var bucketUpdates []*BucketUpdateAPI
-	// var bucketUpdates []*common.BucketUpdate
 	err := meddler.QueryAll(
 		hdb.dbRead, &bucketUpdates,
 		`SELECT num_bucket, withdrawals FROM bucket_update 
@@ -977,7 +979,7 @@ func (hdb *HistoryDB) GetBucketUpdatesInternalAPI() ([]BucketUpdateAPI, error) {
 	return db.SlicePtrsToSlice(bucketUpdates).([]BucketUpdateAPI), tracerr.Wrap(err)
 }
 
-// getNextForgers returns next forgers
+// GetNextForgersInternalAPI returns next forgers
 func (hdb *HistoryDB) GetNextForgersInternalAPI(auctionVars *common.AuctionVariables,
 	auctionConsts *common.AuctionConstants,
 	lastBlock common.Block, currentSlot, lastClosedSlot int64) ([]NextForgerAPI, error) {
@@ -1071,7 +1073,7 @@ func (hdb *HistoryDB) GetNextForgersInternalAPI(auctionVars *common.AuctionVaria
 	return nextForgers, nil
 }
 
-// UpdateMetrics update Status.Metrics information
+// GetMetricsInternalAPI returns the MetricsAPI
 func (hdb *HistoryDB) GetMetricsInternalAPI(lastBatchNum common.BatchNum) (*MetricsAPI, error) {
 	var metrics MetricsAPI
 	// Get the first and last batch of the last 24h and their timestamps
@@ -1171,6 +1173,7 @@ func (hdb *HistoryDB) GetMetricsInternalAPI(lastBatchNum common.BatchNum) (*Metr
 	return &metrics, nil
 }
 
+// GetStateAPI returns the StateAPI
 func (hdb *HistoryDB) GetStateAPI() (*StateAPI, error) {
 	cancel, err := hdb.apiConnCon.Acquire()
 	defer cancel()
