@@ -418,8 +418,13 @@ func (txsel *TxSelector) getL1L2TxSelection(selectionConfig txprocessor.Config,
 			// version of the TxSelector, we discard the L2Tx and
 			// log the error, assuming that this will be iterated in
 			// a near future.
-			return nil, nil, nil, nil, nil, nil,
-				tracerr.Wrap(fmt.Errorf("TxSelector: txprocessor.ProcessL2Tx: %w", err))
+			log.Error(err)
+			// Discard L2Tx, and update Info parameter of the tx,
+			// and add it to the discardedTxs array
+			selectedL2Txs[i].Info = fmt.Sprintf("Tx not selected (in ProcessL2Tx) due to %s", err.Error())
+			discardedL2Txs = append(discardedL2Txs, selectedL2Txs[i])
+			noncesMap[selectedL2Txs[i].FromIdx]--
+			continue
 		}
 		finalL2Txs = append(finalL2Txs, selectedL2Txs[i])
 	}
