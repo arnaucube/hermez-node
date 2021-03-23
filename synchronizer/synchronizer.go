@@ -23,6 +23,12 @@ const (
 	// errStrUnknownBlock is the string returned by geth when querying an
 	// unknown block
 	errStrUnknownBlock = "unknown block"
+	// updateEthBlockNumThreshold is a threshold of number of ethereum blocks left to synchronize, such that
+	// if we have more blocks to sync than the defined value we can aggressively skip calling UpdateEth
+	updateEthBlockNumThreshold = 100
+	// While having more blocks to sync than updateEthBlockNumThreshold, UpdateEth will be called once in a
+	// defined number of blocks
+	updateEthFrequencyDivider = 100
 )
 
 var (
@@ -528,8 +534,11 @@ func (s *Synchronizer) Sync(ctx context.Context,
 	log.Debugf("ethBlock: num: %v, parent: %v, hash: %v",
 		ethBlock.Num, ethBlock.ParentHash.String(), ethBlock.Hash.String())
 
-	if err := s.stats.UpdateEth(s.ethClient); err != nil {
-		return nil, nil, tracerr.Wrap(err)
+	if nextBlockNum+updateEthBlockNumThreshold >= s.stats.Eth.LastBlock.Num ||
+		nextBlockNum%updateEthFrequencyDivider == 0 {
+		if err := s.stats.UpdateEth(s.ethClient); err != nil {
+			return nil, nil, tracerr.Wrap(err)
+		}
 	}
 
 	log.Debugw("Syncing...",
