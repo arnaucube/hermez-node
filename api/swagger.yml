@@ -59,9 +59,9 @@ externalDocs:
   description: Find out more about Hermez network.
   url: 'https://hermez.io'
 servers:
-  - description: Hosted mock up, returns fake data usefull for development
+  - description: Hosted mock up, returns fake data useful for development
     url: https://apimock.hermez.network
-  - description: Localhost mock up, returns fake data usefull for development
+  - description: Localhost mock up, returns fake data useful for development
     url: http://localhost:4010
   - description: Testnet (Rinkeby) server
     url: https://api.testnet.hermez.io
